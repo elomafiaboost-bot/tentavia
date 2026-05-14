@@ -16,18 +16,8 @@ DWORD WINAPI MainThread(LPVOID lpReserved) {
 
     std::cout << "[+] Tentavia Internal Framework carregado!" << std::endl;
 
-    // Inicializa o renderer (hooks de OpenGL/DirectX)
+    // Inicializa o renderer (instala hook em wglSwapBuffers e ativa overlay)
     Renderer::Init();
-
-    // Exemplo de como usar o scanner pra achar algo no processo
-    uintptr_t someFunc = Utils::PatternScan("opengl32.dll", "48 89 5C 24 ? ? ? ?");
-    if (someFunc) {
-        std::cout << "[+] Funcao encontrada em: " << std::hex << someFunc << std::endl;
-        
-        // Exemplo de como criar um hook (detour)
-        void* original = nullptr;
-        Hooks::HookManager::CreateHook((void*)someFunc, (void*)Renderer::hkwglSwapBuffers, &original);
-    }
 
     // Comeando a dissecao
     SDK::Minecraft::PrintLocalPlayerName();

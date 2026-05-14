@@ -17,6 +17,15 @@ cmd /c "call `"$vcvarsPath`" && $compileCmd"
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host "[+] Injector compilado com sucesso! Arquivo: build/injector.exe" -ForegroundColor Green
+
+    # Copia o tentavia.ini para build/ para que o injector.exe o encontre ao lado de si
+    $iniSrc = Join-Path (Split-Path $PSScriptRoot) "tentavia.ini"
+    if (Test-Path $iniSrc) {
+        Copy-Item -Path $iniSrc -Destination "build/tentavia.ini" -Force
+        Write-Host "[+] tentavia.ini copiado para build/" -ForegroundColor Green
+    } else {
+        Write-Host "[!] tentavia.ini nao encontrado — injector usara os valores padrao." -ForegroundColor Yellow
+    }
 } else {
-    Write-Host "[-] Erro na compilao do Injector." -ForegroundColor Red
+    Write-Host "[-] Erro na compilacao do Injector." -ForegroundColor Red
 }
