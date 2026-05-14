@@ -15,6 +15,7 @@
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "gdi32.lib")
+#pragma comment(lib, "advapi32.lib")
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 
 // ── IDs ────────────────────────────────────────────────────────────────────
