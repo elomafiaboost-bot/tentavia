@@ -85,13 +85,14 @@ namespace Renderer {
             return;
         }
 
-        bool ok = HookIAT(hLwjgl, "opengl32.dll", "wglSwapBuffers",
+        // lwjgl64.dll chama SwapBuffers de GDI32 (não wglSwapBuffers de opengl32)
+        bool ok = HookIAT(hLwjgl, "GDI32.dll", "SwapBuffers",
                           reinterpret_cast<void*>(hkwglSwapBuffers),
                           reinterpret_cast<void**>(&owglSwapBuffers));
 
         if (ok)
-            std::cout << "[+] IAT hook instalado. Pressione INSERT para abrir o menu." << std::endl;
+            std::cout << "[+] IAT hook instalado (GDI32!SwapBuffers). Pressione INSERT para abrir o menu." << std::endl;
         else
-            std::cout << "[-] Falha ao instalar IAT hook de wglSwapBuffers." << std::endl;
+            std::cout << "[-] Falha ao instalar IAT hook de SwapBuffers." << std::endl;
     }
 }
