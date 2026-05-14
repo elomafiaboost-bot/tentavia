@@ -30,82 +30,91 @@ typedef void* jmethodID;
 struct JavaVM_;
 struct JNIEnv_;
 
-// Typedefs antecipados — necessários antes de JNINativeInterface_ que usa JNIEnv*
 typedef struct JNIEnv_ JNIEnv;
 typedef struct JavaVM_ JavaVM;
 
 // ─── JNINativeInterface_ ───────────────────────────────────────────────────
-// Vtable da JNIEnv. Cada slot corresponde a um índice fixo definido pela
-// especificação JNI (OpenJDK jni.h). Slots não utilizados são void*.
-// Ref: https://docs.oracle.com/javase/8/docs/technotes/guides/jni/spec/functions.html
+// Vtable da JNIEnv mapeada slot a slot conforme a spec JNI (OpenJDK jni.h).
+// Índices de cada função estão nos comentários.
 struct JNINativeInterface_ {
-    // Índices 0–3: reservados pela JVM
-    void* reserved[4];
+    void* reserved[4];              // 0-3
 
-    // 4: GetVersion   5: DefineClass
-    void* _pad4_5[2];
+    void* _pad4_5[2];               // 4-5  GetVersion, DefineClass
 
-    // 6: FindClass
-    jclass  (JNICALL *FindClass)(JNIEnv*, const char*);
+    // 6
+    jclass   (JNICALL *FindClass)(JNIEnv*, const char*);
 
-    // 7–14: FromReflectedMethod … ThrowNew
-    void* _pad7_14[8];
+    void* _pad7_14[8];              // 7-14
 
-    // 15: ExceptionOccurred
-    jobject (JNICALL *ExceptionOccurred)(JNIEnv*);
+    // 15
+    jobject  (JNICALL *ExceptionOccurred)(JNIEnv*);
 
-    // 16: ExceptionDescribe
-    void* _pad16;
+    void* _pad16;                   // 16 ExceptionDescribe
 
-    // 17: ExceptionClear
-    void    (JNICALL *ExceptionClear)(JNIEnv*);
+    // 17
+    void     (JNICALL *ExceptionClear)(JNIEnv*);
 
-    // 18–30: FatalError … IsInstanceOf (13 slots)
-    void* _pad18_30[13];
+    void* _pad18_22[5];             // 18-22 FatalError .. DeleteGlobalRef
 
-    // 31: GetObjectClass
-    jclass  (JNICALL *GetObjectClass)(JNIEnv*, jobject);
+    // 23
+    void     (JNICALL *DeleteLocalRef)(JNIEnv*, jobject);
 
-    // 32: IsInstanceOf
-    void* _pad32;
+    // 24
+    jboolean (JNICALL *IsSameObject)(JNIEnv*, jobject, jobject);
 
-    // 33: GetMethodID
+    void* _pad25_30[6];             // 25-30 NewLocalRef .. NewObjectA
+
+    // 31
+    jclass   (JNICALL *GetObjectClass)(JNIEnv*, jobject);
+
+    void* _pad32;                   // 32 IsInstanceOf
+
+    // 33
     jmethodID (JNICALL *GetMethodID)(JNIEnv*, jclass, const char*, const char*);
 
-    // 34: CallObjectMethod (variadic — sem argumentos extras para métodos sem parâmetros)
-    jobject (JNICALL *CallObjectMethod)(JNIEnv*, jobject, jmethodID, ...);
+    // 34 – variadic; cobre todos os tipos de argumento via ...
+    jobject  (JNICALL *CallObjectMethod)(JNIEnv*, jobject, jmethodID, ...);
 
-    // 35–93: CallObjectMethodV … SetDoubleField (59 slots)
-    void* _pad35_93[59];
+    void* _pad35_48[14];            // 35-48 CallObject[V/A] .. CallShort[V/A]
 
-    // 94: GetFieldID
+    // 49
+    jint     (JNICALL *CallIntMethod)(JNIEnv*, jobject, jmethodID, ...);
+
+    void* _pad50_93[44];            // 50-93 CallInt[V/A] .. CallNonvirtualVoidA
+
+    // 94
     jfieldID (JNICALL *GetFieldID)(JNIEnv*, jclass, const char*, const char*);
 
-    // 95: GetObjectField
+    // 95
     jobject  (JNICALL *GetObjectField)(JNIEnv*, jobject, jfieldID);
 
-    // 96–112: GetBooleanField … SetDoubleField (17 slots)
-    void* _pad96_112[17];
+    void* _pad96_101[6];            // 96-101 GetBooleanField .. GetLongField
 
-    // 113: GetStaticMethodID
+    // 102
+    jfloat   (JNICALL *GetFloatField)(JNIEnv*, jobject, jfieldID);
+
+    // 103
+    jdouble  (JNICALL *GetDoubleField)(JNIEnv*, jobject, jfieldID);
+
+    void* _pad104_112[9];           // 104-112 SetObjectField .. SetDoubleField
+
+    // 113
     jmethodID (JNICALL *GetStaticMethodID)(JNIEnv*, jclass, const char*, const char*);
 
-    // 114: CallStaticObjectMethod (variadic)
-    jobject   (JNICALL *CallStaticObjectMethod)(JNIEnv*, jclass, jmethodID, ...);
+    // 114 – variadic
+    jobject  (JNICALL *CallStaticObjectMethod)(JNIEnv*, jclass, jmethodID, ...);
 
-    // 115–168: CallStaticObjectMethodV … GetStringUTFLength (54 slots)
-    void* _pad115_168[54];
+    void* _pad115_168[54];          // 115-168
 
-    // 169: GetStringUTFChars
+    // 169
     const char* (JNICALL *GetStringUTFChars)(JNIEnv*, jstring, jboolean*);
 
-    // 170: ReleaseStringUTFChars
+    // 170
     void        (JNICALL *ReleaseStringUTFChars)(JNIEnv*, jstring, const char*);
 
-    // 171–227: GetArrayLength … DeleteWeakGlobalRef (57 slots)
-    void* _pad171_227[57];
+    void* _pad171_227[57];          // 171-227
 
-    // 228: ExceptionCheck
+    // 228
     jboolean (JNICALL *ExceptionCheck)(JNIEnv*);
 };
 

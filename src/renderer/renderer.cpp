@@ -1,5 +1,6 @@
 #include "renderer.hpp"
 #include "../menu/menu.hpp"
+#include "../features/esp.hpp"
 #include <iostream>
 #include <GL/gl.h>
 
@@ -27,6 +28,7 @@ namespace Renderer {
         glPushMatrix();
         glLoadIdentity();
 
+        ESP::Render(sw, sh);
         Menu::Render(hdc, sw, sh);
 
         glMatrixMode(GL_MODELVIEW);
