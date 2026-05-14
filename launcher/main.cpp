@@ -2,382 +2,361 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include <windowsx.h>
 #include <tlhelp32.h>
 #include <shlwapi.h>
-#include <commdlg.h>
-#include <shellapi.h>
 #include <string>
-#include <vector>
-#include <sstream>
 
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "comdlg32.lib")
 #pragma comment(lib, "gdi32.lib")
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(linker, "/SUBSYSTEM:WINDOWS")
 
-// ── IDs ────────────────────────────────────────────────────────────────────
-#define IDC_PROCESS_EDIT   101
-#define IDC_SCAN_BTN       102
-#define IDC_PROCESS_LIST   103
-#define IDC_DLL_EDIT       104
-#define IDC_BROWSE_BTN     105
-#define IDC_INJECT_BTN     106
-#define IDC_LOG            107
-#define IDC_HEADER         108
+// ── Dimensões ──────────────────────────────────────────────────────────────
+static constexpr int W = 360;
+static constexpr int H = 230;
 
-// ── Layout (pixels, área cliente 510×460) ─────────────────────────────────
-#define W_CLIENT  510
-#define H_CLIENT  462
-#define PAD       10
+// ── Paleta ─────────────────────────────────────────────────────────────────
+static constexpr COLORREF C_BG     = RGB( 10,  12,  20);
+static constexpr COLORREF C_BORDER = RGB( 32,  38,  65);
+static constexpr COLORREF C_TEXT   = RGB(220, 228, 252);
+static constexpr COLORREF C_DIM    = RGB( 72,  82, 115);
+static constexpr COLORREF C_BLUE   = RGB( 41, 121, 255);
+static constexpr COLORREF C_PURP   = RGB(124,  77, 255);
+static constexpr COLORREF C_GREEN  = RGB( 46, 213, 115);
+static constexpr COLORREF C_RED    = RGB(235,  77,  75);
+static constexpr COLORREF C_AMBER  = RGB(255, 196,  50);
 
-// ── Estado global ──────────────────────────────────────────────────────────
-static HWND g_hWnd          = nullptr;
-static HWND g_hProcessEdit  = nullptr;
-static HWND g_hProcessList  = nullptr;
-static HWND g_hDllEdit      = nullptr;
-static HWND g_hLog          = nullptr;
-static HFONT g_hFontUI      = nullptr;
-static HFONT g_hFontMono    = nullptr;
-static HBRUSH g_hBrushHeader = nullptr;
+// ── Estado ─────────────────────────────────────────────────────────────────
+enum class Phase { Waiting, Injecting, Success, Error };
 
-static std::vector<DWORD> g_pids;
-static bool g_elevated = false;
+static HWND         g_wnd      = nullptr;
+static Phase        g_phase    = Phase::Waiting;
+static std::wstring g_errMsg;
+static std::wstring g_dllPath;
+static std::wstring g_procName = L"javaw.exe";
+static bool         g_done     = false;
+static bool         g_elevated = false;
+static int          g_tick     = 0;
+static bool         g_closeHov = false;
+static POINT        g_dragOff  = {};
+static bool         g_dragging = false;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
-static bool IsElevated() {
-    BOOL ok = FALSE;
-    HANDLE hTok = nullptr;
-    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hTok)) {
-        TOKEN_ELEVATION e; DWORD sz = sizeof(e);
-        if (GetTokenInformation(hTok, TokenElevation, &e, sz, &sz))
-            ok = e.TokenIsElevated;
-        CloseHandle(hTok);
+static bool CheckElevated() {
+    BOOL ok = FALSE; HANDLE h = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &h)) {
+        TOKEN_ELEVATION e{}; DWORD sz = sizeof(e);
+        if (GetTokenInformation(h, TokenElevation, &e, sz, &sz)) ok = e.TokenIsElevated;
+        CloseHandle(h);
     }
     return ok != FALSE;
 }
 
-static void Log(const std::wstring& msg) {
-    int len = GetWindowTextLengthW(g_hLog);
-    SendMessageW(g_hLog, EM_SETSEL, len, len);
-    SendMessageW(g_hLog, EM_REPLACESEL, FALSE, (LPARAM)(msg + L"\r\n").c_str());
-    SendMessageW(g_hLog, EM_SCROLLCARET, 0, 0);
+static DWORD FindProc(const wchar_t* name) {
+    HANDLE s = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (s == INVALID_HANDLE_VALUE) return 0;
+    PROCESSENTRY32W pe{ sizeof(pe) };
+    DWORD pid = 0;
+    if (Process32FirstW(s, &pe)) do {
+        if (!_wcsicmp(pe.szExeFile, name)) { pid = pe.th32ProcessID; break; }
+    } while (Process32NextW(s, &pe));
+    CloseHandle(s); return pid;
 }
 
-static std::wstring GetCtrlText(HWND h) {
-    int n = GetWindowTextLengthW(h) + 1;
-    std::wstring s(n, L'\0');
-    GetWindowTextW(h, &s[0], n);
-    s.resize(wcslen(s.c_str()));
-    return s;
+static std::wstring DefaultDll() {
+    wchar_t d[MAX_PATH]; GetModuleFileNameW(nullptr, d, MAX_PATH);
+    PathRemoveFileSpecW(d);
+    return std::wstring(d) + L"\\tentavia.dll";
 }
 
-static HWND MakeCtrl(const wchar_t* cls, const wchar_t* txt, DWORD style,
-                     int x, int y, int w, int h, int id) {
-    HWND hC = CreateWindowExW(0, cls, txt, WS_CHILD | WS_VISIBLE | style,
-        x, y, w, h, g_hWnd, (HMENU)(intptr_t)id,
-        GetModuleHandleW(nullptr), nullptr);
-    SendMessageW(hC, WM_SETFONT, (WPARAM)g_hFontUI, TRUE);
-    return hC;
-}
+// ── Injeção (thread separada para não travar a UI) ─────────────────────────
+static DWORD WINAPI InjectThread(LPVOID arg) {
+    DWORD pid = (DWORD)(uintptr_t)arg;
 
-// ── Scan ───────────────────────────────────────────────────────────────────
-static void ScanProcesses() {
-    g_pids.clear();
-    SendMessageW(g_hProcessList, LB_RESETCONTENT, 0, 0);
+    int sz = WideCharToMultiByte(CP_ACP, 0, g_dllPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    std::string a(sz, '\0');
+    WideCharToMultiByte(CP_ACP, 0, g_dllPath.c_str(), -1, &a[0], sz, nullptr, nullptr);
+    a.resize(sz - 1);
 
-    std::wstring procName = GetCtrlText(g_hProcessEdit);
-    if (procName.empty()) procName = L"javaw.exe";
-
-    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnap == INVALID_HANDLE_VALUE) { Log(L"[-] Falha ao listar processos."); return; }
-
-    PROCESSENTRY32W pe; pe.dwSize = sizeof(pe);
-    int count = 0;
-    if (Process32FirstW(hSnap, &pe)) {
-        do {
-            if (_wcsicmp(pe.szExeFile, procName.c_str()) == 0) {
-                g_pids.push_back(pe.th32ProcessID);
-                std::wstringstream ss;
-                ss << pe.szExeFile << L"   PID: " << pe.th32ProcessID;
-                SendMessageW(g_hProcessList, LB_ADDSTRING, 0, (LPARAM)ss.str().c_str());
-                count++;
+    HANDLE hp = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
+    bool ok = false;
+    if (hp) {
+        void* p = VirtualAllocEx(hp, nullptr, a.size() + 1, MEM_COMMIT, PAGE_READWRITE);
+        if (p) {
+            WriteProcessMemory(hp, p, a.c_str(), a.size() + 1, nullptr);
+            void* ll = (void*)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryA");
+            HANDLE ht = CreateRemoteThread(hp, nullptr, 0, (LPTHREAD_START_ROUTINE)ll, p, 0, nullptr);
+            if (ht) {
+                WaitForSingleObject(ht, 6000);
+                DWORD c = 0; GetExitCodeThread(ht, &c); ok = (c != 0);
+                CloseHandle(ht);
             }
-        } while (Process32NextW(hSnap, &pe));
+            VirtualFreeEx(hp, p, 0, MEM_RELEASE);
+        }
+        CloseHandle(hp);
     }
-    CloseHandle(hSnap);
 
-    if (count == 0) {
-        std::wstring msg = L"[-] Nenhum processo \"" + procName + L"\" encontrado.";
-        Log(msg);
-    } else {
-        std::wstringstream ss;
-        ss << L"[+] " << count << L" processo(s) encontrado(s).";
-        Log(ss.str());
-        SendMessageW(g_hProcessList, LB_SETCURSEL, 0, 0);
-    }
+    g_phase = ok ? Phase::Success : Phase::Error;
+    if (!ok) g_errMsg = L"Falha. Verifique a DLL e permissões.";
+    g_done = true;
+    InvalidateRect(g_wnd, nullptr, FALSE);
+    if (ok) SetTimer(g_wnd, 3, 2200, nullptr); // auto-close
+    return 0;
 }
 
-// ── Browse DLL ─────────────────────────────────────────────────────────────
-static void BrowseDLL() {
-    wchar_t buf[MAX_PATH] = {};
-    OPENFILENAMEW ofn = {};
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner   = g_hWnd;
-    ofn.lpstrFilter = L"DLL Files\0*.dll\0All Files\0*.*\0";
-    ofn.lpstrFile   = buf;
-    ofn.nMaxFile    = MAX_PATH;
-    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-    ofn.lpstrTitle  = L"Selecione a DLL do Tentavia";
-    if (GetOpenFileNameW(&ofn))
-        SetWindowTextW(g_hDllEdit, buf);
+// ── GDI ────────────────────────────────────────────────────────────────────
+static HFONT Font(int size, bool bold = false, const wchar_t* face = L"Segoe UI") {
+    return CreateFontW(size, 0, 0, 0, bold ? FW_BOLD : FW_NORMAL,
+        FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+        DEFAULT_PITCH | FF_DONTCARE, face);
 }
 
-// ── Inject ─────────────────────────────────────────────────────────────────
-static void InjectDLL() {
-    int sel = (int)SendMessageW(g_hProcessList, LB_GETCURSEL, 0, 0);
-    if (sel < 0 || sel >= (int)g_pids.size()) {
-        Log(L"[-] Selecione um processo na lista."); return;
+static void TXT(HDC dc, const wchar_t* t, RECT r, COLORREF c, HFONT f, UINT fl = DT_CENTER | DT_VCENTER | DT_SINGLELINE) {
+    auto old = (HFONT)SelectObject(dc, f);
+    SetTextColor(dc, c); DrawTextW(dc, t, -1, &r, fl);
+    SelectObject(dc, old);
+}
+
+static void FILL(HDC dc, RECT r, COLORREF c) {
+    HBRUSH b = CreateSolidBrush(c); FillRect(dc, &r, b); DeleteObject(b);
+}
+
+static void Dot(HDC dc, int cx, int cy, int r, COLORREF c, bool hollow = false) {
+    HBRUSH b = hollow ? (HBRUSH)GetStockObject(NULL_BRUSH) : CreateSolidBrush(c);
+    HPEN   p = CreatePen(PS_SOLID, 1, c);
+    auto ob = (HBRUSH)SelectObject(dc, b); auto op = (HPEN)SelectObject(dc, p);
+    Ellipse(dc, cx - r, cy - r, cx + r, cy + r);
+    SelectObject(dc, ob); SelectObject(dc, op);
+    if (!hollow) DeleteObject(b); DeleteObject(p);
+}
+
+// Simula glow com círculos concêntricos cada vez mais escuros
+static void Glow(HDC dc, int cx, int cy, int r, COLORREF c) {
+    for (int i = r + 8; i > r; i -= 2) {
+        float t = (float)(i - r) / 8.0f;
+        COLORREF d = RGB(
+            (BYTE)(GetRValue(c) * (1.0f - t * 0.92f)),
+            (BYTE)(GetGValue(c) * (1.0f - t * 0.92f)),
+            (BYTE)(GetBValue(c) * (1.0f - t * 0.92f)));
+        Dot(dc, cx, cy, i, d);
     }
+    Dot(dc, cx, cy, r, c);
+}
 
-    std::wstring wDll = GetCtrlText(g_hDllEdit);
-    if (wDll.empty()) { Log(L"[-] Informe o caminho da DLL."); return; }
-    if (!PathFileExistsW(wDll.c_str())) { Log(L"[-] DLL nao encontrada: " + wDll); return; }
+// ── Paint ──────────────────────────────────────────────────────────────────
+static void Paint(HWND wnd) {
+    PAINTSTRUCT ps; HDC rdc = BeginPaint(wnd, &ps);
+    HDC dc = CreateCompatibleDC(rdc);
+    HBITMAP bm = CreateCompatibleBitmap(rdc, W, H);
+    auto obm = (HBITMAP)SelectObject(dc, bm);
+    SetBkMode(dc, TRANSPARENT);
 
-    // Converte para char* (LoadLibraryA precisa de ANSI/UTF-8)
-    int sz = WideCharToMultiByte(CP_ACP, 0, wDll.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string dllA(sz, '\0');
-    WideCharToMultiByte(CP_ACP, 0, wDll.c_str(), -1, &dllA[0], sz, nullptr, nullptr);
-    dllA.resize(sz - 1);
+    // Fundo
+    FILL(dc, {0, 0, W, H}, C_BG);
 
-    DWORD pid = g_pids[sel];
+    // Linha de acento superior: azul → roxo
+    FILL(dc, {16, 0, W / 2, 2}, C_BLUE);
+    FILL(dc, {W / 2, 0, W - 16, 2}, C_PURP);
+
+    // Borda sutil
     {
-        std::wstringstream ss; ss << L"[>] Injetando em PID " << pid << L"..."; Log(ss.str());
+        auto bp = CreatePen(PS_SOLID, 1, C_BORDER);
+        auto op = (HPEN)SelectObject(dc, bp);
+        auto ob = (HBRUSH)SelectObject(dc, GetStockObject(NULL_BRUSH));
+        RoundRect(dc, 0, 0, W, H, 14, 14);
+        SelectObject(dc, op); SelectObject(dc, ob); DeleteObject(bp);
     }
 
-    HANDLE hProc = OpenProcess(PROCESS_ALL_ACCESS, FALSE, pid);
-    if (!hProc) {
-        std::wstringstream ss;
-        ss << L"[-] OpenProcess falhou (erro " << GetLastError() << L"). Execute como Administrador.";
-        Log(ss.str()); return;
+    // Botão fechar ✕
+    {
+        COLORREF xCol = g_closeHov ? C_RED : C_DIM;
+        auto f = Font(13);
+        TXT(dc, L"✕", {W - 34, 7, W - 8, 27}, xCol, f);
+        DeleteObject(f);
     }
 
-    void* pBuf = VirtualAllocEx(hProc, nullptr, dllA.size() + 1, MEM_COMMIT, PAGE_READWRITE);
-    if (!pBuf) {
-        Log(L"[-] VirtualAllocEx falhou."); CloseHandle(hProc); return;
+    // Título principal
+    {
+        auto f = Font(25, true);
+        // Mede largura para gradiente manual (usamos cor sólida branca aqui)
+        TXT(dc, L"TENTAVIA", {0, 16, W, 52}, C_TEXT, f);
+        DeleteObject(f);
     }
 
-    if (!WriteProcessMemory(hProc, pBuf, dllA.c_str(), dllA.size() + 1, nullptr)) {
-        Log(L"[-] WriteProcessMemory falhou.");
-        VirtualFreeEx(hProc, pBuf, 0, MEM_RELEASE); CloseHandle(hProc); return;
+    // Subtítulo
+    {
+        auto f = Font(11);
+        TXT(dc, L"Internal Framework", {0, 52, W, 68}, C_DIM, f);
+        DeleteObject(f);
     }
 
-    void* pLL = (void*)GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryA");
-    HANDLE hThr = CreateRemoteThread(hProc, nullptr, 0,
-        (LPTHREAD_START_ROUTINE)pLL, pBuf, 0, nullptr);
-
-    if (hThr) {
-        Log(L"[+] Thread remota criada. Aguardando...");
-        WaitForSingleObject(hThr, 6000);
-        DWORD code = 0; GetExitCodeThread(hThr, &code);
-        CloseHandle(hThr);
-        if (code)
-            Log(L"[+] DLL injetada com sucesso!");
-        else
-            Log(L"[-] LoadLibraryA retornou NULL — verifique o caminho.");
-    } else {
-        std::wstringstream ss;
-        ss << L"[-] CreateRemoteThread falhou (erro " << GetLastError() << L").";
-        Log(ss.str());
+    // Divisor horizontal
+    {
+        auto dp = CreatePen(PS_SOLID, 1, C_BORDER);
+        auto op = (HPEN)SelectObject(dc, dp);
+        MoveToEx(dc, 30, 75, nullptr); LineTo(dc, W - 30, 75);
+        SelectObject(dc, op); DeleteObject(dp);
     }
 
-    VirtualFreeEx(hProc, pBuf, 0, MEM_RELEASE);
-    CloseHandle(hProc);
-}
+    // ── Status ─────────────────────────────────────────────────────────
+    static const wchar_t* dots[] = { L"", L".", L"..", L"..." };
+    COLORREF sc; std::wstring st;
+    switch (g_phase) {
+    case Phase::Waiting:
+        sc = C_BLUE;
+        st = std::wstring(L"Aguardando Minecraft") + dots[g_tick % 4];
+        break;
+    case Phase::Injecting:
+        sc = C_AMBER;
+        st = L"Injetando DLL" + std::wstring(dots[g_tick % 4]);
+        break;
+    case Phase::Success:
+        sc = C_GREEN;
+        st = L"Injetado com sucesso!";
+        break;
+    case Phase::Error:
+        sc = C_RED;
+        st = g_errMsg.empty() ? L"Falha na injeção." : g_errMsg;
+        break;
+    }
 
-// ── DLL path padrão (lado do launcher.exe) ────────────────────────────────
-static std::wstring DefaultDllPath() {
-    wchar_t dir[MAX_PATH];
-    GetModuleFileNameW(nullptr, dir, MAX_PATH);
-    PathRemoveFileSpecW(dir);
-    return std::wstring(dir) + L"\\tentavia.dll";
-}
+    // Dot pulsando à esquerda do texto
+    int dotR = 6 + (g_phase == Phase::Waiting ? g_tick % 2 : 0);
+    Glow(dc, 54, 108, dotR, sc);
 
-// ── Centraliza janela na tela ──────────────────────────────────────────────
-static void CenterWindow(HWND hWnd) {
-    RECT rc; GetWindowRect(hWnd, &rc);
-    int w = rc.right - rc.left, h = rc.bottom - rc.top;
-    int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
-    SetWindowPos(hWnd, nullptr, (sw - w) / 2, (sh - h) / 2, 0, 0, SWP_NOZORDER | SWP_NOSIZE);
+    // Texto de status
+    {
+        auto f = Font(13, true);
+        TXT(dc, st.c_str(), {68, 96, W - 10, 122}, sc, f, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DeleteObject(f);
+    }
+
+    // Info: DLL e processo
+    {
+        auto f = Font(11);
+        std::wstring dll  = std::wstring(L"DLL: ") + PathFindFileNameW(g_dllPath.c_str());
+        std::wstring proc = L"Target: " + g_procName;
+        TXT(dc, dll.c_str(),  {0, 136, W, 152}, C_DIM, f);
+        TXT(dc, proc.c_str(), {0, 152, W, 168}, C_DIM, f);
+        DeleteObject(f);
+    }
+
+    // Alerta de não-admin
+    if (!g_elevated) {
+        auto f = Font(11);
+        TXT(dc, L"⚠  Execute como Administrador", {0, 172, W, 188}, C_RED, f);
+        DeleteObject(f);
+    }
+
+    // Watermark
+    {
+        auto f = Font(10);
+        TXT(dc, L"github.com/elomafiaboost-bot/tentavia", {0, H - 18, W, H - 4}, RGB(26, 30, 50), f);
+        DeleteObject(f);
+    }
+
+    BitBlt(rdc, 0, 0, W, H, dc, 0, 0, SRCCOPY);
+    SelectObject(dc, obm); DeleteObject(bm); DeleteDC(dc);
+    EndPaint(wnd, &ps);
 }
 
 // ── WndProc ────────────────────────────────────────────────────────────────
-static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
-
-    case WM_CREATE: {
-        g_hWnd = hWnd;
-
-        // Fontes
-        g_hFontUI   = CreateFontW(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        g_hFontMono = CreateFontW(13, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, FIXED_PITCH | FF_DONTCARE, L"Consolas");
-
-        // Brush do header azul escuro
-        g_hBrushHeader = CreateSolidBrush(RGB(20, 30, 50));
-
-        // ── Header band (pintado no WM_PAINT) ─────────────────────────────
-        // apenas placeholders; texto real desenhado no WM_PAINT
-
-        // ── Row 1: Processo ───────────────────────────────────────────────
-        int y = 46;
-        MakeCtrl(L"STATIC", L"Processo:", SS_LEFT, PAD, y + 3, 72, 18, 0);
-        g_hProcessEdit = MakeCtrl(L"EDIT", L"javaw.exe",
-            WS_BORDER | ES_AUTOHSCROLL, 85, y, 240, 24, IDC_PROCESS_EDIT);
-        MakeCtrl(L"BUTTON", L"Scan", BS_PUSHBUTTON,
-            333, y, 80, 24, IDC_SCAN_BTN);
-
-        // ── Row 2: Lista de processos ─────────────────────────────────────
-        y = 80;
-        MakeCtrl(L"STATIC", L"Processos detectados:", SS_LEFT, PAD, y, 200, 18, 0);
-        g_hProcessList = MakeCtrl(L"LISTBOX", L"",
-            WS_BORDER | LBS_NOTIFY | WS_VSCROLL | LBS_NOINTEGRALHEIGHT,
-            PAD, y + 20, W_CLIENT - PAD * 2, 84, IDC_PROCESS_LIST);
-
-        // ── Row 3: DLL path ───────────────────────────────────────────────
-        y = 196;
-        MakeCtrl(L"STATIC", L"DLL:", SS_LEFT, PAD, y + 3, 35, 18, 0);
-        g_hDllEdit = MakeCtrl(L"EDIT", DefaultDllPath().c_str(),
-            WS_BORDER | ES_AUTOHSCROLL, 48, y, 342, 24, IDC_DLL_EDIT);
-        MakeCtrl(L"BUTTON", L"Browse", BS_PUSHBUTTON,
-            398, y, 100, 24, IDC_BROWSE_BTN);
-
-        // ── Inject button ─────────────────────────────────────────────────
-        HWND hInj = MakeCtrl(L"BUTTON", L"INJETAR",
-            BS_PUSHBUTTON | BS_DEFPUSHBUTTON,
-            PAD, 234, W_CLIENT - PAD * 2, 38, IDC_INJECT_BTN);
-        // Deixa a fonte do botão de injetar um pouco maior/bold
-        HFONT hFontBold = CreateFontW(15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        SendMessageW(hInj, WM_SETFONT, (WPARAM)hFontBold, TRUE);
-
-        // ── Log ───────────────────────────────────────────────────────────
-        y = 284;
-        MakeCtrl(L"STATIC", L"Log:", SS_LEFT, PAD, y, 40, 18, 0);
-        g_hLog = MakeCtrl(L"EDIT", L"",
-            WS_BORDER | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL,
-            PAD, y + 20, W_CLIENT - PAD * 2, 154, IDC_LOG);
-        SendMessageW(g_hLog, WM_SETFONT, (WPARAM)g_hFontMono, TRUE);
-
+    case WM_CREATE:
+        g_wnd      = wnd;
+        g_dllPath  = DefaultDll();
+        g_elevated = CheckElevated();
+        SetTimer(wnd, 1, 450, nullptr); // animação
+        SetTimer(wnd, 2, 900, nullptr); // poll
         break;
-    }
 
-    // ── Header band personalizado ──────────────────────────────────────────
-    case WM_PAINT: {
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hWnd, &ps);
-
-        // Fundo do header
-        RECT rcHeader = { 0, 0, W_CLIENT, 38 };
-        FillRect(hdc, &rcHeader, g_hBrushHeader);
-
-        // Título
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(220, 230, 255));
-        HFONT hFontTitle = CreateFontW(16, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HFONT hOld = (HFONT)SelectObject(hdc, hFontTitle);
-        RECT rcTitle = { PAD, 0, 300, 38 };
-        DrawTextW(hdc, L"Tentavia Launcher", -1, &rcTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        // Status de elevação
-        if (g_elevated)
-            SetTextColor(hdc, RGB(80, 220, 100));
-        else
-            SetTextColor(hdc, RGB(230, 80, 80));
-
-        RECT rcStatus = { 0, 0, W_CLIENT - PAD, 38 };
-        DrawTextW(hdc, g_elevated ? L"● ADMINISTRADOR" : L"● SEM ELEVAÇÃO", -1,
-            &rcStatus, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
-
-        SelectObject(hdc, hOld);
-        DeleteObject(hFontTitle);
-        EndPaint(hWnd, &ps);
-        break;
-    }
-
-    // ── Cor do fundo das labels (casam com o fundo da janela) ─────────────
-    case WM_CTLCOLORSTATIC: {
-        HDC hdc = (HDC)wParam;
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(30, 30, 30));
-        return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
-    }
-
-    case WM_COMMAND:
-        switch (LOWORD(wParam)) {
-        case IDC_SCAN_BTN:   ScanProcesses(); break;
-        case IDC_BROWSE_BTN: BrowseDLL();     break;
-        case IDC_INJECT_BTN: InjectDLL();     break;
+    case WM_TIMER:
+        if (wp == 1) {
+            g_tick++;
+            InvalidateRect(wnd, nullptr, FALSE);
+        } else if (wp == 2 && !g_done) {
+            DWORD pid = FindProc(g_procName.c_str());
+            if (pid) {
+                KillTimer(wnd, 2);
+                g_phase = Phase::Injecting;
+                InvalidateRect(wnd, nullptr, FALSE);
+                UpdateWindow(wnd);
+                HANDLE ht = CreateThread(nullptr, 0, InjectThread, (LPVOID)(uintptr_t)pid, 0, nullptr);
+                if (ht) CloseHandle(ht);
+            }
+        } else if (wp == 3) {
+            KillTimer(wnd, 3);
+            DestroyWindow(wnd);
         }
         break;
 
-    case WM_DESTROY:
-        DeleteObject(g_hFontUI);
-        DeleteObject(g_hFontMono);
-        DeleteObject(g_hBrushHeader);
-        PostQuitMessage(0);
-        break;
+    case WM_PAINT: Paint(wnd); break;
+    case WM_ERASEBKGND: return 1;
 
-    default:
-        return DefWindowProcW(hWnd, msg, wParam, lParam);
+    case WM_MOUSEMOVE: {
+        int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+        bool hov = (x >= W - 36 && y <= 30);
+        if (hov != g_closeHov) { g_closeHov = hov; InvalidateRect(wnd, nullptr, FALSE); }
+
+        // Rastreia saída do mouse para limpar hover
+        TRACKMOUSEEVENT tme{ sizeof(tme), TME_LEAVE, wnd, 0 };
+        TrackMouseEvent(&tme);
+
+        if (g_dragging) {
+            POINT cur; GetCursorPos(&cur);
+            SetWindowPos(wnd, nullptr, cur.x - g_dragOff.x, cur.y - g_dragOff.y,
+                0, 0, SWP_NOZORDER | SWP_NOSIZE);
+        }
+        break;
+    }
+    case WM_MOUSELEAVE:
+        g_closeHov = false; InvalidateRect(wnd, nullptr, FALSE); break;
+
+    case WM_LBUTTONDOWN: {
+        int x = GET_X_LPARAM(lp), y = GET_Y_LPARAM(lp);
+        if (x >= W - 36 && y <= 30) { DestroyWindow(wnd); break; }
+        g_dragging = true;
+        g_dragOff  = { x, y };
+        SetCapture(wnd);
+        break;
+    }
+    case WM_LBUTTONUP: g_dragging = false; ReleaseCapture(); break;
+
+    case WM_DESTROY: PostQuitMessage(0); break;
+    default: return DefWindowProcW(wnd, msg, wp, lp);
     }
     return 0;
 }
 
-// ── WinMain ────────────────────────────────────────────────────────────────
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int nCmdShow) {
-    g_elevated = IsElevated();
-
-    WNDCLASSEXW wc    = {};
-    wc.cbSize         = sizeof(wc);
-    wc.style          = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc    = WndProc;
-    wc.hInstance      = hInst;
-    wc.hbrBackground  = (HBRUSH)(COLOR_BTNFACE + 1);
-    wc.lpszClassName  = L"TentaviaLauncher";
-    wc.hCursor        = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hIcon          = LoadIconW(nullptr, IDI_APPLICATION);
+// ── Entry point ────────────────────────────────────────────────────────────
+int WINAPI WinMain(HINSTANCE hi, HINSTANCE, LPSTR, int) {
+    WNDCLASSEXW wc{};
+    wc.cbSize        = sizeof(wc);
+    wc.lpfnWndProc   = WndProc;
+    wc.hInstance     = hi;
+    wc.hbrBackground = (HBRUSH)GetStockObject(NULL_BRUSH);
+    wc.lpszClassName = L"TLauncher";
+    wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
     RegisterClassExW(&wc);
 
-    // Calcula tamanho da janela (área cliente fixa)
-    RECT rc = { 0, 0, W_CLIENT, H_CLIENT };
-    DWORD style = WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX;
-    AdjustWindowRect(&rc, style, FALSE);
+    int sx = GetSystemMetrics(SM_CXSCREEN), sy = GetSystemMetrics(SM_CYSCREEN);
+    HWND wnd = CreateWindowExW(WS_EX_APPWINDOW, L"TLauncher", L"Tentavia",
+        WS_POPUP, (sx - W) / 2, (sy - H) / 2, W, H,
+        nullptr, nullptr, hi, nullptr);
 
-    g_hWnd = CreateWindowExW(0, L"TentaviaLauncher", L"Tentavia Launcher",
-        style, CW_USEDEFAULT, CW_USEDEFAULT,
-        rc.right - rc.left, rc.bottom - rc.top,
-        nullptr, nullptr, hInst, nullptr);
+    // Cantos arredondados via region (funciona em Win10 e Win11)
+    HRGN rgn = CreateRoundRectRgn(0, 0, W + 1, H + 1, 14, 14);
+    SetWindowRgn(wnd, rgn, FALSE);
 
-    CenterWindow(g_hWnd);
-    ShowWindow(g_hWnd, nCmdShow);
-    UpdateWindow(g_hWnd);
+    ShowWindow(wnd, SW_SHOW);
+    UpdateWindow(wnd);
 
-    // Scan automático ao abrir
-    ScanProcesses();
-
-    MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0)) {
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
-    }
-    return (int)msg.wParam;
+    MSG m;
+    while (GetMessageW(&m, nullptr, 0, 0)) { TranslateMessage(&m); DispatchMessageW(&m); }
+    return 0;
 }
