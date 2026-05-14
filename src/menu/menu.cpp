@@ -209,6 +209,8 @@ void Render(HDC hdc, int sw, int sh) {
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_TEXTURE_2D);
     glDisable(GL_LIGHTING);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_ALPHA_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glLineWidth(1.0f);
