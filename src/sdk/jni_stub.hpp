@@ -30,6 +30,10 @@ typedef void* jmethodID;
 struct JavaVM_;
 struct JNIEnv_;
 
+// Typedefs antecipados — necessários antes de JNINativeInterface_ que usa JNIEnv*
+typedef struct JNIEnv_ JNIEnv;
+typedef struct JavaVM_ JavaVM;
+
 // ─── JNINativeInterface_ ───────────────────────────────────────────────────
 // Vtable da JNIEnv. Cada slot corresponde a um índice fixo definido pela
 // especificação JNI (OpenJDK jni.h). Slots não utilizados são void*.
@@ -110,8 +114,6 @@ struct JNIEnv_ {
     const JNINativeInterface_* functions;
 };
 
-typedef struct JNIEnv_ JNIEnv;
-
 // ─── JavaVM vtable ────────────────────────────────────────────────────────
 struct JNIInvokeInterface_ {
     void* reserved0;
@@ -126,5 +128,3 @@ struct JNIInvokeInterface_ {
 struct JavaVM_ {
     const struct JNIInvokeInterface_* functions;
 };
-
-typedef struct JavaVM_ JavaVM;

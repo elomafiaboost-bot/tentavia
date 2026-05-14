@@ -2,11 +2,10 @@
 #include <iostream>
 #include <thread>
 
-// Nossos mdulos
 #include "utils/scanner.hpp"
 #include "hooks/hook_manager.hpp"
 #include "renderer/renderer.hpp"
-#include "sdk/minecraft.hpp"
+#include "menu/menu.hpp"
 #include "sdk/minecraft.hpp"
 
 DWORD WINAPI MainThread(LPVOID lpReserved) {
@@ -16,7 +15,10 @@ DWORD WINAPI MainThread(LPVOID lpReserved) {
 
     std::cout << "[+] Tentavia Internal Framework carregado!" << std::endl;
 
-    // Inicializa o renderer (instala hook em wglSwapBuffers e ativa overlay)
+    // Inicializa tabs e features do menu
+    Menu::Init();
+
+    // Instala hook em wglSwapBuffers (o renderer chama Menu::Render a cada frame)
     Renderer::Init();
 
     // Comeando a dissecao
