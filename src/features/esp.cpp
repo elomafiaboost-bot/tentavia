@@ -130,13 +130,33 @@ static bool IsEnabled(const char* name) {
 
 // ── Render ────────────────────────────────────────────────────────────────────
 
+// Desenha um pequeno quadrado colorido no canto para confirmar que ESP está rodando
+static void DrawDebugDot(int sw, int sh, bool jniOk) {
+    glPushAttrib(GL_ALL_ATTRIB_BITS);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // Verde = JNI funcionando, Vermelho = JNI falhou
+    if (jniOk) glColor4f(0.0f, 1.0f, 0.2f, 0.9f);
+    else        glColor4f(1.0f, 0.1f, 0.1f, 0.9f);
+    float bx = (float)sw - 10.f, by = (float)sh - 10.f;
+    glBegin(GL_QUADS);
+    glVertex2f(bx, by); glVertex2f(bx+8, by);
+    glVertex2f(bx+8, by+8); glVertex2f(bx, by+8);
+    glEnd();
+    glPopAttrib();
+}
+
 void Render(int sw, int sh) {
     bool espOn     = IsEnabled("ESP");
     bool tracersOn = IsEnabled("Tracers");
     if (!espOn && !tracersOn) return;
 
     SDK::CameraInfo cam{};
-    if (!SDK::Minecraft::GetCameraInfo(cam) || !cam.valid) return;
+    bool camOk = SDK::Minecraft::GetCameraInfo(cam) && cam.valid;
+    DrawDebugDot(sw, sh, camOk); // verde=JNI OK, vermelho=JNI falhou
+    if (!camOk) return;
 
     std::vector<SDK::EntityInfo> players;
     SDK::Minecraft::GetNearbyPlayers(players);

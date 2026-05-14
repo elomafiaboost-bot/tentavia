@@ -74,23 +74,36 @@ void Minecraft::PrintLocalPlayerName() {
 // ── GetCameraInfo ─────────────────────────────────────────────────────────────
 
 bool Minecraft::GetCameraInfo(CameraInfo& out) {
+    static bool s_logged = false;
     JNIEnv* env = Env();
-    if (!env) return false;
+    if (!env) { if (!s_logged) { std::cout << "[-] ESP: JNIEnv null" << std::endl; s_logged=true; } return false; }
     auto* f = env->functions;
 
     jclass mcClass = f->FindClass(env, Classes::Minecraft);
-    if (!mcClass) { f->ExceptionClear(env); return false; }
+    if (!mcClass) {
+        f->ExceptionClear(env);
+        if (!s_logged) { std::cout << "[-] ESP: FindClass(Minecraft) falhou - nome obfuscado?" << std::endl; s_logged=true; }
+        return false;
+    }
 
     jmethodID getMinecraft = f->GetStaticMethodID(env, mcClass, "getMinecraft",
                                                   "()Lnet/minecraft/client/Minecraft;");
-    if (!getMinecraft) { f->ExceptionClear(env); return false; }
+    if (!getMinecraft) {
+        f->ExceptionClear(env);
+        if (!s_logged) { std::cout << "[-] ESP: getMinecraft() nao encontrado" << std::endl; s_logged=true; }
+        return false;
+    }
 
     jobject mc = f->CallStaticObjectMethod(env, mcClass, getMinecraft);
     if (!mc || f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
 
     jfieldID thePlayerF = f->GetFieldID(env, mcClass, "thePlayer",
                                         "Lnet/minecraft/client/entity/EntityPlayerSP;");
-    if (!thePlayerF) { f->ExceptionClear(env); return false; }
+    if (!thePlayerF) {
+        f->ExceptionClear(env);
+        if (!s_logged) { std::cout << "[-] ESP: campo thePlayer nao encontrado" << std::endl; s_logged=true; }
+        return false;
+    }
 
     jobject player = f->GetObjectField(env, mc, thePlayerF);
     if (!player || f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
@@ -104,8 +117,17 @@ bool Minecraft::GetCameraInfo(CameraInfo& out) {
     jfieldID pitchF = f->GetFieldID(env, playerClass, "rotationPitch", "F");
 
     if (!pxF || !pyF || !pzF || !yawF || !pitchF) {
-        f->ExceptionClear(env); return false;
+        f->ExceptionClear(env);
+        if (!s_logged) {
+            std::cout << "[-] ESP: campos de posicao/rotacao nao encontrados"
+                      << " posX=" << (pxF?"ok":"FAIL")
+                      << " posY=" << (pyF?"ok":"FAIL")
+                      << " rotYaw=" << (yawF?"ok":"FAIL") << std::endl;
+            s_logged = true;
+        }
+        return false;
     }
+    if (!s_logged) std::cout << "[+] ESP: GetCameraInfo OK" << std::endl;
 
     out.eyeX  = f->GetDoubleField(env, player, pxF);
     out.eyeY  = f->GetDoubleField(env, player, pyF) + 1.62; // eye height
@@ -137,6 +159,7 @@ bool Minecraft::GetCameraInfo(CameraInfo& out) {
 // ── GetNearbyPlayers ──────────────────────────────────────────────────────────
 
 bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
+    static bool s_logged = false;
     JNIEnv* env = Env();
     if (!env) return false;
     auto* f = env->functions;
@@ -161,7 +184,11 @@ bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
     // theWorld
     jfieldID theWorldF = f->GetFieldID(env, mcClass, "theWorld",
                                        "Lnet/minecraft/client/multiplayer/WorldClient;");
-    if (!theWorldF) { f->ExceptionClear(env); return false; }
+    if (!theWorldF) {
+        f->ExceptionClear(env);
+        if (!s_logged) { std::cout << "[-] ESP: campo theWorld nao encontrado (vanilla obfuscado?)" << std::endl; s_logged=true; }
+        return false;
+    }
 
     jobject world = f->GetObjectField(env, mc, theWorldF);
     if (!world || f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
@@ -169,7 +196,11 @@ bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
     // world.playerEntities (campo herdado de World)
     jclass worldClass = f->GetObjectClass(env, world);
     jfieldID listF    = f->GetFieldID(env, worldClass, "playerEntities", "Ljava/util/List;");
-    if (!listF) { f->ExceptionClear(env); return false; }
+    if (!listF) {
+        f->ExceptionClear(env);
+        if (!s_logged) { std::cout << "[-] ESP: campo playerEntities nao encontrado" << std::endl; s_logged=true; }
+        return false;
+    }
 
     jobject list = f->GetObjectField(env, world, listF);
     if (!list || f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
