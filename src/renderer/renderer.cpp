@@ -1,6 +1,7 @@
 #include "renderer.hpp"
 #include "../menu/menu.hpp"
 #include "../features/esp.hpp"
+#include "../features/aimbot.hpp"
 #include "../sdk/gl_capture.hpp"
 #include <iostream>
 #include <thread>
@@ -147,6 +148,7 @@ namespace Renderer {
         glBindTexture(GL_TEXTURE_2D, 0);
 
         ESP::Render(sw, sh);
+        Aimbot::Update(sw, sh);
         Menu::Render(hdc, sw, sh);
 
         glMatrixMode(GL_MODELVIEW);
@@ -154,6 +156,15 @@ namespace Renderer {
         glMatrixMode(GL_PROJECTION);
         glPopMatrix();
         glPopAttrib();
+
+        // XRay: aplicado após restaurar o estado para persistir no próximo frame
+        {
+            bool xray = false;
+            for (auto& tab : Menu::tabs)
+                for (auto& ft : tab.features)
+                    if (ft.name == "XRay" && ft.enabled) xray = true;
+            glDepthFunc(xray ? GL_ALWAYS : GL_LEQUAL);
+        }
 
         // Limpa dados capturados — ser�o preenchidos novamente no pr�ximo frame
         GLCapture::Clear();
