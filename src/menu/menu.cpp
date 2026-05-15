@@ -2,6 +2,7 @@
 #include <GL/gl.h>
 #include <cstring>
 #include <cstdio>
+#include <cmath>
 
 #pragma comment(lib, "opengl32.lib")
 
@@ -85,6 +86,36 @@ static void DrawStr(float sx, float sy, const char* txt) {
 // Largura aproximada do texto (7.2 px/char — Segoe UI 14px)
 static float TW(const char* s) { return s ? (float)strlen(s) * 7.2f : 0.0f; }
 
+// ── API pública de texto para outros módulos ─────────────────────────────────
+bool FontReady() { return g_fontReady; }
+
+float GetValue(const char* name) {
+    for (auto& tab : tabs)
+        for (auto& ft : tab.features)
+            if (ft.name == name) return ft.value;
+    return 0.0f;
+}
+
+void DrawText2D(int sw, int sh, float px, float py,
+                float r, float g, float b,
+                const char* txt, bool centerX)
+{
+    if (!g_fontReady || !txt || !*txt) return;
+    if (centerX) px -= TW(txt) * 0.5f;
+    glColor4f(r, g, b, 1.0f);
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadIdentity();
+    glOrtho(0.0, (double)sw, 0.0, (double)sh, -1.0, 1.0);
+    glMatrixMode(GL_MODELVIEW);
+    glRasterPos2f(px, (float)sh - py - (float)g_fontH + 2.0f);
+    glListBase(g_fontBase);
+    glCallLists((GLsizei)strlen(txt), GL_UNSIGNED_BYTE, txt);
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    glMatrixMode(GL_MODELVIEW);
+}
+
 // ── Helpers de desenho ───────────────────────────────────────────────────────
 static void Set(const Col4& c, float a = -1.f) {
     glColor4f(c.r, c.g, c.b, a < 0 ? c.a : a);
@@ -138,11 +169,39 @@ static float g_mx = 0, g_my = 0;
 static bool  g_dragging = false;
 static float g_dragOX, g_dragOY;
 
+// Keybinds: mapeamento VK → nome da feature (edge-triggered, sem hold repeat)
+struct KeyBind { int vk; const char* feature; bool prev; };
+static KeyBind g_keybinds[] = {
+    { VK_F1, "ESP",        false },
+    { VK_F2, "Tracers",    false },
+    { VK_F3, "Chest ESP",  false },
+    { VK_F4, "Aimbot",     false },
+    { VK_F5, "XRay",       false },
+    { VK_F6, "NameTags",   false },
+    { VK_F7, "Fullbright", false },
+};
+
+static void UpdateKeybinds() {
+    for (auto& kb : g_keybinds) {
+        bool down = (GetAsyncKeyState(kb.vk) & 0x8000) != 0;
+        if (down && !kb.prev) {
+            // Toggle a feature correspondente em qualquer tab
+            for (auto& tab : tabs)
+                for (auto& ft : tab.features)
+                    if (ft.name == kb.feature) ft.enabled = !ft.enabled;
+        }
+        kb.prev = down;
+    }
+}
+
 static bool Hit(float rx, float ry, float rw, float rh) {
     return g_mx >= rx && g_mx <= rx + rw && g_my >= ry && g_my <= ry + rh;
 }
 
 static void UpdateInput(HDC hdc) {
+    // Keybinds globais — funcionam mesmo com o menu fechado
+    UpdateKeybinds();
+
     // Toggle INSERT
     bool ins = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
     if (ins && !g_prevIns) visible = !visible;
@@ -175,13 +234,27 @@ static void UpdateInput(HDC hdc) {
                 activeTab = i;
     }
 
-    // Clique em feature
+    // Clique / drag em feature
     if (activeTab < (int)tabs.size()) {
         auto& fts = tabs[activeTab].features;
         for (int i = 0; i < (int)fts.size(); i++) {
             float iy = y + HDR_H + TAB_H + i * ITM_H;
-            if (Hit(x, iy, MW, ITM_H) && g_clicked)
-                fts[i].enabled = !fts[i].enabled;
+            if (!Hit(x, iy, MW, ITM_H)) continue;
+
+            if (fts[i].hasValue) {
+                // Slider: arrastar muda o valor (funciona enquanto o botão está pressionado)
+                if (lbtn) {
+                    float barX = x + PAD + 18.f + TW(fts[i].name.c_str()) + 6.f;
+                    float barW = x + MW - 52.f - barX;
+                    if (barW > 1.f) {
+                        float t = (g_mx - barX) / barW;
+                        t = t < 0.f ? 0.f : t > 1.f ? 1.f : t;
+                        fts[i].value = fts[i].vMin + t * (fts[i].vMax - fts[i].vMin);
+                    }
+                }
+            } else {
+                if (g_clicked) fts[i].enabled = !fts[i].enabled;
+            }
         }
     }
 }
@@ -189,7 +262,13 @@ static void UpdateInput(HDC hdc) {
 // ── Init ─────────────────────────────────────────────────────────────────────
 void Init() {
     tabs.clear();
-    tabs.push_back({"Combat",   {{"KillAura",false},{"Reach",false},{"AutoBlock",false},{"Criticals",false},{"Aimbot",false}}});
+    tabs.push_back({"Combat",   {
+        {"KillAura",false}, {"Reach",false}, {"AutoBlock",false}, {"Criticals",false},
+        {"Aimbot",  false},
+        {"Aim FOV",    false, true, 300.f,  50.f, 800.f},
+        {"Aim Speed",  false, true,  0.6f,  0.1f,   2.0f},
+        {"Aim Height", false, true,  0.5f,  0.0f,   1.0f},
+    }});
     tabs.push_back({"Movement", {{"Speed",false},{"Fly",false},{"Sprint",false},{"NoFall",false},{"Bhop",false}}});
     tabs.push_back({"Visual",   {{"ESP",true},{"Tracers",false},{"Chest ESP",false},{"NameTags",false},{"XRay",false},{"Fullbright",false}}});
     tabs.push_back({"Player",   {{"AntiKB",false},{"FastPlace",false},{"NoHunger",false},{"AutoEat",false}}});
@@ -285,29 +364,65 @@ void Render(HDC hdc, int sw, int sh) {
             Set(C_SEP);
             HLine(mx + 8.f, iy + ITM_H - 0.5f, mx + MW - 8.f);
 
-            // Dot de status (igual ao launcher, com glow se ligado)
+            // Dot de status
             float dotX = mx + PAD + 6.f, dotY = iy + ITM_H * 0.5f;
-            if (on)  Glow(dotX, dotY, 5.f, C_BLUE);
-            else     FilledDot(dotX, dotY, 4.f, C_DIMLO, 0.7f);
-
-            // Nome da feature
             const char* fname = fts[i].name.c_str();
-            if (on)       Set(C_TEXT);
-            else if (hov) Set(C_DIM);
-            else          Set(C_DIMLO);
-            DrawStr(mx + PAD + 18.f, iy + 9.f, fname);
 
-            // Badge ON/OFF à direita
-            if (on) {
-                // Pill azul com "ON"
-                float bw = TW("ON") + 12.f;
-                float bx = mx + MW - bw - 8.f, by = iy + (ITM_H - 14.f) * 0.5f;
-                glColor4f(C_BLUE.r, C_BLUE.g, C_BLUE.b, 0.20f); FillR(bx, by, bw, 14.f);
-                Set(C_BLUE); LineR(bx, by, bw, 14.f);
-                DrawStr(bx + 6.f, by + 1.f, "ON");
+            if (fts[i].hasValue) {
+                // ── Slider ────────────────────────────────────────────────
+                FilledDot(dotX, dotY, 3.f, C_DIMLO, 0.5f);
+
+                if (hov) Set(C_DIM); else Set(C_DIMLO);
+                DrawStr(mx + PAD + 18.f, iy + 9.f, fname);
+
+                float barX = mx + PAD + 18.f + TW(fname) + 6.f;
+                float barW = mx + MW - 52.f - barX;
+                float barY = iy + (ITM_H - 5.f) * 0.5f;
+
+                if (barW > 10.f) {
+                    float t = (fts[i].vMax > fts[i].vMin)
+                        ? (fts[i].value - fts[i].vMin) / (fts[i].vMax - fts[i].vMin)
+                        : 0.f;
+                    // Fundo
+                    glColor4f(0.07f, 0.09f, 0.18f, 0.85f);
+                    FillR(barX, barY, barW, 5.f);
+                    // Fill azul
+                    Set(C_BLUE, 0.75f);
+                    FillR(barX, barY, barW * t, 5.f);
+                    // Borda
+                    Set(C_BORD);
+                    LineR(barX, barY, barW, 5.f);
+                }
+
+                // Valor numérico
+                char valStr[16];
+                if ((fts[i].vMax - fts[i].vMin) > 10.f)
+                    snprintf(valStr, sizeof(valStr), "%.0f", fts[i].value);
+                else
+                    snprintf(valStr, sizeof(valStr), "%.2f", fts[i].value);
+                Set(C_DIM);
+                DrawStr(mx + MW - TW(valStr) - 6.f, iy + 9.f, valStr);
+
             } else {
-                float bx = mx + MW - TW("OFF") - 14.f;
-                Set(C_DIMLO); DrawStr(bx, iy + 9.f, "OFF");
+                // ── Toggle ────────────────────────────────────────────────
+                if (on)  Glow(dotX, dotY, 5.f, C_BLUE);
+                else     FilledDot(dotX, dotY, 4.f, C_DIMLO, 0.7f);
+
+                if (on)       Set(C_TEXT);
+                else if (hov) Set(C_DIM);
+                else          Set(C_DIMLO);
+                DrawStr(mx + PAD + 18.f, iy + 9.f, fname);
+
+                if (on) {
+                    float bw = TW("ON") + 12.f;
+                    float bx = mx + MW - bw - 8.f, by = iy + (ITM_H - 14.f) * 0.5f;
+                    glColor4f(C_BLUE.r, C_BLUE.g, C_BLUE.b, 0.20f); FillR(bx, by, bw, 14.f);
+                    Set(C_BLUE); LineR(bx, by, bw, 14.f);
+                    DrawStr(bx + 6.f, by + 1.f, "ON");
+                } else {
+                    float bx = mx + MW - TW("OFF") - 14.f;
+                    Set(C_DIMLO); DrawStr(bx, iy + 9.f, "OFF");
+                }
             }
         }
     }
@@ -315,7 +430,7 @@ void Render(HDC hdc, int sw, int sh) {
     // ── Rodapé ────────────────────────────────────────────────────────────
     float footY = my + mh - FOT_H;
     Set(C_FOOT); FillR(mx, footY, MW, FOT_H);
-    Set(C_DIMLO); DrawStr(mx + PAD, footY + 2.f, "INSERT para fechar");
+    Set(C_DIMLO); DrawStr(mx + PAD, footY + 2.f, "INSERT  F1-F7: toggles");
     Set(C_DIMLO); DrawStr(mx + MW - TW("v0.1") - PAD, footY + 2.f, "v0.1");
 
     // ── Borda externa ─────────────────────────────────────────────────────

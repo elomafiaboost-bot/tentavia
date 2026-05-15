@@ -4,10 +4,10 @@
 #include <windows.h>
 #include <cmath>
 
-// Configurações do aimbot (mesmas do projeto de referência)
-static constexpr float AIM_FOV_PX  = 300.0f; // raio de detecção em pixels
-static constexpr float AIM_SPEED   = 0.6f;   // suavização (0.1 lento → 2.0 rápido)
-static constexpr float AIM_HEIGHT  = 0.5f;   // 0.0=pés, 1.0=cabeça, 0.5=centro
+// Valores padrão usados enquanto o menu não inicializou
+static constexpr float AIM_FOV_DEFAULT    = 300.0f;
+static constexpr float AIM_SPEED_DEFAULT  =   0.6f;
+static constexpr float AIM_HEIGHT_DEFAULT =   0.5f;
 
 namespace Aimbot {
 
@@ -54,13 +54,18 @@ void Update(int sw, int sh) {
     GetCursorInfo(&ci);
     if (ci.flags & CURSOR_SHOWING) return;
 
+    // Lê configurações do menu (com fallback para os defaults)
+    float fovPx  = Menu::GetValue("Aim FOV");    if (fovPx  < 1.f) fovPx  = AIM_FOV_DEFAULT;
+    float speed  = Menu::GetValue("Aim Speed");  if (speed  < 0.01f) speed  = AIM_SPEED_DEFAULT;
+    float height = Menu::GetValue("Aim Height");
+
     float centerX = (float)sw * 0.5f;
     float centerY = (float)sh * 0.5f;
 
     // Interpola entre pés (-1.0 = base do hitbox) e cabeça (+1.0 = topo)
-    float targetY = -1.0f + AIM_HEIGHT * 2.0f;
+    float targetY = -1.0f + height * 2.0f;
 
-    float bestDist = AIM_FOV_PX * AIM_FOV_PX;
+    float bestDist = fovPx * fovPx;
     float bestSX = 0, bestSY = 0;
     bool  found  = false;
 
@@ -84,8 +89,8 @@ void Update(int sw, int sh) {
 
     if (!found) return;
 
-    int moveX = (int)lroundf((bestSX - centerX) * AIM_SPEED);
-    int moveY = (int)lroundf((bestSY - centerY) * AIM_SPEED);
+    int moveX = (int)lroundf((bestSX - centerX) * speed);
+    int moveY = (int)lroundf((bestSY - centerY) * speed);
 
     // Cap de movimento por frame para evitar saltos bruscos
     if (moveX >  50) moveX =  50;

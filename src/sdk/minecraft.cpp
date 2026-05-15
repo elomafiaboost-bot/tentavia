@@ -36,6 +36,7 @@ static jmethodID s_setAccM      = nullptr;
 static jmethodID s_toStrM       = nullptr;
 static jmethodID s_listSizeM    = nullptr;
 static jmethodID s_listGetM     = nullptr;
+static jmethodID s_setDoubleM   = nullptr; // Field.setDouble(Object, double)
 
 static bool CacheReflectMethods(JNIEnv* env) {
     if (s_gdfM) return true;
@@ -56,11 +57,12 @@ static bool CacheReflectMethods(JNIEnv* env) {
     s_toStrM      = f->GetMethodID(env, objCls,   "toString",          "()Ljava/lang/String;");
     s_listSizeM   = f->GetMethodID(env, listCls,  "size",              "()I");
     s_listGetM    = f->GetMethodID(env, listCls,  "get",               "(I)Ljava/lang/Object;");
+    s_setDoubleM  = f->GetMethodID(env, fieldCls, "setDouble", "(Ljava/lang/Object;D)V");
     f->DeleteLocalRef(env, classCls); f->DeleteLocalRef(env, fieldCls);
     f->DeleteLocalRef(env, objCls);   f->DeleteLocalRef(env, listCls);
     if (f->ExceptionCheck(env)) { f->ExceptionClear(env); s_gdfM = nullptr; return false; }
     return s_gdfM && s_getNameM && s_getSuperM && s_getDeclClsM && s_getModsM && s_getTypeM &&
-           s_getM && s_setAccM  && s_listSizeM && s_listGetM;
+           s_getM && s_setAccM  && s_listSizeM && s_listGetM && s_setDoubleM;
 }
 
 // ── Reflection helpers ────────────────────────────────────────────────────────
@@ -134,7 +136,20 @@ static double FieldGetDouble(JNIEnv* env, jobject field, jobject inst) {
     return r;
 }
 
+// Escreve um campo double via reflection (setAccessible + setDouble)
+static void FieldSetDouble(JNIEnv* env, jobject field, jobject inst, double val) {
+    auto* f = env->functions;
+    f->CallVoidMethod(env, field, s_setAccM, (jboolean)1);
+    if (f->ExceptionCheck(env)) f->ExceptionClear(env);
+    f->CallVoidMethod(env, field, s_setDoubleM, inst, val);
+    if (f->ExceptionCheck(env)) f->ExceptionClear(env);
+}
+
 static bool IsCoordRange(double v) { return v > -60000.0 && v < 60000.0; }
+
+// Campos de motion cacheados (jobject = java.lang.reflect.Field)
+static jobject g_motXField = nullptr;
+static jobject g_motZField = nullptr;
 
 // Object type (non-array, non-primitive, non-String)
 static bool IsObjType(const std::string& t) {
@@ -585,6 +600,55 @@ static bool CacheEntityFields(JNIEnv* env, jobject entity) {
     return true;
 }
 
+// ── Cache motionX/Z — doubles na classe Entity que NÃO são posX/Y/Z ──────────
+// Usa IsSameObject para excluir os campos de posição já cacheados.
+static bool CacheMotionFields(JNIEnv* env, jobject entity) {
+    if (g_motXField && g_motZField) return true;
+    if (!g_posXField) return false;
+    auto* f = env->functions;
+
+    // Obtém a classe que declarou posX (Entity base)
+    jclass entityCls = (jclass)f->CallObjectMethod(env, g_posXField, s_getDeclClsM);
+    if (!entityCls || f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
+
+    jobject flds = GetDeclaredFields(env, entityCls);
+    f->DeleteLocalRef(env, entityCls);
+    if (!flds) return false;
+
+    jsize    n       = f->GetArrayLength(env, flds);
+    jobject  cands[3] = {};
+    int      found   = 0;
+
+    for (jsize i = 0; i < n && found < 3; i++) {
+        jobject field = f->GetObjectArrayElement(env, flds, i);
+        if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
+
+        if (FieldTypeName(env, field) == "double") {
+            // Exclui posX, posY, posZ comparando objetos
+            bool isPos = f->IsSameObject(env, field, g_posXField) ||
+                         f->IsSameObject(env, field, g_posYField) ||
+                         f->IsSameObject(env, field, g_posZField);
+            if (!isPos) {
+                cands[found++] = field;
+                continue;
+            }
+        }
+        f->DeleteLocalRef(env, field);
+    }
+    f->DeleteLocalRef(env, flds);
+
+    if (found < 3) {
+        for (int i = 0; i < found; i++) f->DeleteLocalRef(env, cands[i]);
+        return false;
+    }
+    // cands[0]=motionX, cands[1]=motionY, cands[2]=motionZ
+    g_motXField = f->NewGlobalRef(env, cands[0]);
+    g_motZField = f->NewGlobalRef(env, cands[2]);
+    for (int i = 0; i < 3; i++) f->DeleteLocalRef(env, cands[i]);
+    std::cout << "[+] SDK: campos motionX/Z cacheados." << std::endl;
+    return true;
+}
+
 // ── Cache rotationYaw/rotationPitch from the same class that declares posX ────
 // posX is in Entity base class; rotationYaw/rotationPitch are the first 2 floats
 // declared in that same class.
@@ -698,5 +762,40 @@ bool Minecraft::GetCameraInfo(CameraInfo& out) {
 }
 
 void Minecraft::PrintLocalPlayerName() {}
+
+bool Minecraft::ApplyAntiKB() {
+    JNIEnv* env = Env();
+    if (!env || !g_initDone || !g_entityList) return false;
+    auto* f = env->functions;
+
+    // Obtém o jogador local — índice 0 na lista de entidades
+    jobject entity = nullptr;
+    if (g_entityListIsArr) {
+        jsize count = f->GetArrayLength(env, g_entityList);
+        if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
+        if (count == 0) return false;
+        entity = f->GetObjectArrayElement(env, g_entityList, 0);
+    } else {
+        jint count = f->CallIntMethod(env, g_entityList, s_listSizeM);
+        if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
+        if (count == 0) return false;
+        entity = f->CallObjectMethod(env, g_entityList, s_listGetM, (jint)0);
+    }
+    if (!entity || f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
+
+    // Cache dos campos de posição necessário antes do de motion
+    CacheEntityFields(env, entity);
+
+    // Cache e escrita dos campos de motion
+    bool ok = false;
+    if (CacheMotionFields(env, entity)) {
+        FieldSetDouble(env, g_motXField, entity, 0.0);
+        FieldSetDouble(env, g_motZField, entity, 0.0);
+        ok = true;
+    }
+
+    f->DeleteLocalRef(env, entity);
+    return ok;
+}
 
 } // namespace SDK

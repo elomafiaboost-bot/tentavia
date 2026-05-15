@@ -21,6 +21,8 @@ public:
     static void PrintLocalPlayerName();
     static bool GetNearbyPlayers(std::vector<EntityInfo>& out);
     static bool GetCameraInfo(CameraInfo& out);
+    // Zera motionX/Z do jogador local para cancelar knockback horizontal.
+    static bool ApplyAntiKB();
 };
 
 namespace Classes {

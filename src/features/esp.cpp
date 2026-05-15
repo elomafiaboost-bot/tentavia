@@ -205,9 +205,10 @@ static void DrawDebugDot(bool glOk, bool jniOk) {
 
 // ── Render ────────────────────────────────────────────────────────────────────
 void Render(int sw, int sh) {
-    bool espOn    = IsEnabled("ESP");
-    bool tracerOn = IsEnabled("Tracers");
-    bool chestOn  = IsEnabled("Chest ESP");
+    bool espOn      = IsEnabled("ESP");
+    bool tracerOn   = IsEnabled("Tracers");
+    bool chestOn    = IsEnabled("Chest ESP");
+    bool nameTagOn  = IsEnabled("NameTags");
 
     bool glOk  = !GLCapture::players.empty();
     bool jniOk = false;
@@ -222,7 +223,7 @@ void Render(int sw, int sh) {
 
     DrawDebugDot(glOk, jniOk);
 
-    if (!espOn && !tracerOn && !chestOn) return;
+    if (!espOn && !tracerOn && !chestOn && !nameTagOn) return;
 
     glPushAttrib(GL_ALL_ATTRIB_BITS);
     glDisable(GL_DEPTH_TEST);
@@ -263,6 +264,17 @@ void Render(int sw, int sh) {
                     glVertex2f((float)sw * 0.5f, (float)sh);
                     glVertex2f(fsx, fsy);
                     glEnd();
+                }
+            }
+
+            if (nameTagOn && Menu::FontReady()) {
+                // Projeta ponto acima da cabeça (y=+1.15 = ligeiramente acima do topo)
+                float hsx, hsy;
+                if (MatrixProject(ent.mv, ent.pr, 0.f, 1.15f, 0.f, sw, sh, hsx, hsy)) {
+                    char label[16];
+                    snprintf(label, sizeof(label), "Player %d", (int)i);
+                    Menu::DrawText2D(sw, sh, hsx, hsy - 14.f,
+                                     1.0f, 1.0f, 1.0f, label, /*centerX=*/true);
                 }
             }
         }

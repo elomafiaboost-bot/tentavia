@@ -3,6 +3,7 @@
 #include "../features/esp.hpp"
 #include "../features/aimbot.hpp"
 #include "../sdk/gl_capture.hpp"
+#include "../sdk/minecraft.hpp"
 #include <iostream>
 #include <thread>
 #include <chrono>
@@ -149,6 +150,16 @@ namespace Renderer {
 
         ESP::Render(sw, sh);
         Aimbot::Update(sw, sh);
+
+        // AntiKB: zera motionX/Z do jogador local via JNI a cada frame
+        {
+            bool antiKB = false;
+            for (auto& tab : Menu::tabs)
+                for (auto& ft : tab.features)
+                    if (ft.name == "AntiKB" && ft.enabled) antiKB = true;
+            if (antiKB) SDK::Minecraft::ApplyAntiKB();
+        }
+
         Menu::Render(hdc, sw, sh);
 
         glMatrixMode(GL_MODELVIEW);
@@ -157,13 +168,24 @@ namespace Renderer {
         glPopMatrix();
         glPopAttrib();
 
-        // XRay: aplicado após restaurar o estado para persistir no próximo frame
+        // XRay + Fullbright: aplicados após restaurar o estado para persistir no próximo frame
         {
-            bool xray = false;
+            bool xray = false, fullbright = false;
             for (auto& tab : Menu::tabs)
-                for (auto& ft : tab.features)
-                    if (ft.name == "XRay" && ft.enabled) xray = true;
+                for (auto& ft : tab.features) {
+                    if (ft.name == "XRay"       && ft.enabled) xray       = true;
+                    if (ft.name == "Fullbright" && ft.enabled) fullbright = true;
+                }
+
             glDepthFunc(xray ? GL_ALWAYS : GL_LEQUAL);
+
+            if (fullbright) {
+                GLfloat full[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+                glLightModelfv(GL_LIGHT_MODEL_AMBIENT, full);
+            } else {
+                GLfloat def[] = { 0.0f, 0.0f, 0.0f, 1.0f };
+                glLightModelfv(GL_LIGHT_MODEL_AMBIENT, def);
+            }
         }
 
         // Limpa dados capturados — ser�o preenchidos novamente no pr�ximo frame
