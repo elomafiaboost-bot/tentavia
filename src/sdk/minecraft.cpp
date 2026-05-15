@@ -3,185 +3,147 @@
 #include <iostream>
 #include <cstring>
 
-// ─── Estratégia de descoberta de classes/campos ───────────────────────────────
-//
-// O Minecraft que está rodando tem classes obfuscadas (ex: "bib" para Minecraft).
-// Em vez de procurar pelo nome desobfuscado, usamos heurísticas:
-//
-// 1. ENCONTRAR A CLASSE MINECRAFT:
-//    Procura uma classe com nome curto (1-5 chars, sem pacote) que tenha
-//    um campo STATIC do próprio tipo (padrão singleton: "theMinecraft").
-//
-// 2. ENCONTRAR A LISTA DE ENTIDADES:
-//    A partir da instância Minecraft, busca campos não-nulos cujo tipo
-//    é java.util.List (ou subclasse). Checa se a lista contém objetos com
-//    3+ campos double em faixa razoável de coordenadas. Esse é o playerEntities.
-//
-// 3. POSIÇÃO DA CÂMERA:
-//    O local player é o primeiro objeto da lista cuja classe tem campo static
-//    do próprio tipo (padrão singleton para Entity? não). Na prática, procuramos
-//    o objeto com posição DIFERENTE dos outros no playerEntities — ou usamos
-//    qualquer entrada da lista como referência de câmera (em singleplayer é o
-//    único jogador; em multiplayer excluímos pelo nome).
-//
-// Todos os caches abaixo são populados na primeira chamada bem-sucedida.
-// ─────────────────────────────────────────────────────────────────────────────
-
+// ── Cache global ──────────────────────────────────────────────────────────────
 namespace SDK {
 
 static JNIEnv* Env() { return JNIUtils::GetJNIEnv(); }
 
-// ── Cache ─────────────────────────────────────────────────────────────────────
-static jclass  g_mcClass      = nullptr;
-static jobject g_mcInstance   = nullptr;  // global ref
-static jobject g_entityList   = nullptr;  // global ref para a List de entidades
-static jobject g_localPlayer  = nullptr;  // global ref para o local player
-static bool    g_initDone     = false;
-static bool    g_initFailed   = false;
-static int     g_retryCount   = 0;
+static jclass  g_mcClass     = nullptr;
+static jobject g_mcInstance  = nullptr;  // global ref
+static jobject g_entityList  = nullptr;  // global ref para a List de jogadores
+static bool    g_initDone    = false;
+static bool    g_initFailed  = false;
+static int     g_retryCount  = 0;
 
-// ── Helpers de reflexão JNI ───────────────────────────────────────────────────
+// Campos double de posição (global refs para java.lang.reflect.Field)
+static jobject g_posXField   = nullptr;
+static jobject g_posYField   = nullptr;
+static jobject g_posZField   = nullptr;
 
-// Retorna a classe do objeto (GetObjectClass = local ref)
-static inline jclass ObjClass(JNIEnv* env, jobject obj) {
-    return env->functions->GetObjectClass(env, obj);
-}
+// ── Helpers de reflexão ───────────────────────────────────────────────────────
 
-// Chama getDeclaredFields() em um objeto Class, retorna Field[] (local ref)
-static jobject CallGetDeclaredFields(JNIEnv* env, jclass cls) {
+// Pré-carregados uma vez para não re-buscar a cada frame
+static jmethodID s_gdfM         = nullptr; // Class.getDeclaredFields()
+static jmethodID s_getNameM     = nullptr; // Class.getName()
+static jmethodID s_getModsM     = nullptr; // Field.getModifiers()
+static jmethodID s_getTypeM     = nullptr; // Field.getType()
+static jmethodID s_getM         = nullptr; // Field.get(Object)
+static jmethodID s_setAccM      = nullptr; // Field.setAccessible(boolean)
+static jmethodID s_toStrM       = nullptr; // Object.toString()
+static jmethodID s_listSizeM    = nullptr; // List.size()
+static jmethodID s_listGetM     = nullptr; // List.get(int)
+
+static bool CacheReflectMethods(JNIEnv* env) {
+    if (s_gdfM) return true;
     auto* f = env->functions;
-    jclass classCls    = f->FindClass(env, "java/lang/Class");
-    if (!classCls) { f->ExceptionClear(env); return nullptr; }
-    jmethodID gdfM     = f->GetMethodID(env, classCls, "getDeclaredFields",
-                                         "()[Ljava/lang/reflect/Field;");
-    if (!gdfM) { f->ExceptionClear(env); return nullptr; }
-    jobject fields = f->CallObjectMethod(env, cls, gdfM);
-    if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return nullptr; }
-    return fields;
-}
 
-// Chama Field.getModifiers() → int
-static jint FieldGetModifiers(JNIEnv* env, jobject field) {
-    auto* f = env->functions;
-    jclass fieldCls = ObjClass(env, field);
-    jmethodID m     = f->GetMethodID(env, fieldCls, "getModifiers", "()I");
-    f->DeleteLocalRef(env, fieldCls);
-    if (!m) { f->ExceptionClear(env); return 0; }
-    jint r = f->CallIntMethod(env, field, m);
-    if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return 0; }
-    return r;
-}
-
-// Chama Field.getType().getName() → std::string
-static std::string FieldTypeName(JNIEnv* env, jobject field) {
-    auto* f = env->functions;
-    jclass fieldCls   = ObjClass(env, field);
-    jmethodID getTypeM = f->GetMethodID(env, fieldCls, "getType", "()Ljava/lang/Class;");
-    f->DeleteLocalRef(env, fieldCls);
-    if (!getTypeM) { f->ExceptionClear(env); return ""; }
-    jobject typeObj = f->CallObjectMethod(env, field, getTypeM);
-    if (!typeObj || f->ExceptionCheck(env)) { f->ExceptionClear(env); return ""; }
-
-    jclass typeCls    = ObjClass(env, typeObj);
-    jmethodID nameM   = f->GetMethodID(env, typeCls, "getName", "()Ljava/lang/String;");
-    f->DeleteLocalRef(env, typeCls);
-    if (!nameM) { f->ExceptionClear(env); f->DeleteLocalRef(env, typeObj); return ""; }
-    jstring ns = (jstring)f->CallObjectMethod(env, typeObj, nameM);
-    f->DeleteLocalRef(env, typeObj);
-    if (!ns || f->ExceptionCheck(env)) { f->ExceptionClear(env); return ""; }
-
-    const char* cs = f->GetStringUTFChars(env, ns, nullptr);
-    std::string result = cs ? cs : "";
-    if (cs) f->ReleaseStringUTFChars(env, ns, cs);
-    f->DeleteLocalRef(env, ns);
-    return result;
-}
-
-// Chama Class.getName() no objeto dado
-static std::string ClassName(JNIEnv* env, jobject obj) {
-    auto* f = env->functions;
-    jclass cls      = ObjClass(env, obj);
-    jmethodID nameM = f->GetMethodID(env, cls, "getName", "()Ljava/lang/String;");
-    f->DeleteLocalRef(env, cls);
-    if (!nameM) { f->ExceptionClear(env); return ""; }
-    jstring ns = (jstring)f->CallObjectMethod(env, obj, nameM);
-    if (!ns || f->ExceptionCheck(env)) { f->ExceptionClear(env); return ""; }
-    const char* cs = f->GetStringUTFChars(env, ns, nullptr);
-    std::string r = cs ? cs : "";
-    if (cs) f->ReleaseStringUTFChars(env, ns, cs);
-    f->DeleteLocalRef(env, ns);
-    return r;
-}
-
-// Chama Field.get(instance) → jobject com setAccessible(true) antes
-static jobject FieldGet(JNIEnv* env, jobject field, jobject instance) {
-    auto* f = env->functions;
-    jclass fieldCls = ObjClass(env, field);
-
-    // setAccessible(true) para campos privados
-    jmethodID setAccM = f->GetMethodID(env, fieldCls, "setAccessible", "(Z)V");
-    if (setAccM) {
-        f->CallObjectMethod(env, field, setAccM, (jboolean)1);
-        if (f->ExceptionCheck(env)) f->ExceptionClear(env);
+    jclass classCls = f->FindClass(env, "java/lang/Class");
+    jclass fieldCls = f->FindClass(env, "java/lang/reflect/Field");
+    jclass objCls   = f->FindClass(env, "java/lang/Object");
+    jclass listCls  = f->FindClass(env, "java/util/List");
+    if (!classCls || !fieldCls || !objCls || !listCls) {
+        f->ExceptionClear(env); return false;
     }
 
-    jmethodID getM = f->GetMethodID(env, fieldCls, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+    s_gdfM      = f->GetMethodID(env, classCls, "getDeclaredFields",
+                                   "()[Ljava/lang/reflect/Field;");
+    s_getNameM  = f->GetMethodID(env, classCls, "getName", "()Ljava/lang/String;");
+    s_getModsM  = f->GetMethodID(env, fieldCls, "getModifiers", "()I");
+    s_getTypeM  = f->GetMethodID(env, fieldCls, "getType", "()Ljava/lang/Class;");
+    s_getM      = f->GetMethodID(env, fieldCls, "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+    s_setAccM   = f->GetMethodID(env, fieldCls, "setAccessible", "(Z)V");
+    s_toStrM    = f->GetMethodID(env, objCls,   "toString", "()Ljava/lang/String;");
+    s_listSizeM = f->GetMethodID(env, listCls,  "size", "()I");
+    s_listGetM  = f->GetMethodID(env, listCls,  "get", "(I)Ljava/lang/Object;");
+
+    f->DeleteLocalRef(env, classCls);
     f->DeleteLocalRef(env, fieldCls);
-    if (!getM) { f->ExceptionClear(env); return nullptr; }
-    jobject val = f->CallObjectMethod(env, field, getM, instance);
+    f->DeleteLocalRef(env, objCls);
+    f->DeleteLocalRef(env, listCls);
+
+    if (f->ExceptionCheck(env)) { f->ExceptionClear(env); s_gdfM = nullptr; return false; }
+    return s_gdfM && s_getNameM && s_getModsM && s_getTypeM &&
+           s_getM && s_setAccM  && s_listSizeM && s_listGetM;
+}
+
+// Retorna getDeclaredFields() de um objeto Class (a própria classe)
+// classObj deve ser um jclass (java.lang.Class instance)
+static jobject GetDeclaredFields(JNIEnv* env, jobject classObj) {
+    auto* f = env->functions;
+    jobject arr = f->CallObjectMethod(env, classObj, s_gdfM);
+    if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return nullptr; }
+    return arr;
+}
+
+// Chama Class.getName() em um jclass ou objeto Class
+static std::string GetClassName(JNIEnv* env, jobject classObj) {
+    auto* f = env->functions;
+    jstring s = (jstring)f->CallObjectMethod(env, classObj, s_getNameM);
+    if (!s || f->ExceptionCheck(env)) { f->ExceptionClear(env); return ""; }
+    const char* cs = f->GetStringUTFChars(env, s, nullptr);
+    std::string r = cs ? cs : "";
+    if (cs) f->ReleaseStringUTFChars(env, s, cs);
+    f->DeleteLocalRef(env, s);
+    return r;
+}
+
+// Field.get(instance) — faz setAccessible(true) antes
+static jobject FieldGet(JNIEnv* env, jobject field, jobject instance) {
+    auto* f = env->functions;
+    // setAccessible(true) para acessar campos privados
+    f->CallVoidMethod(env, field, s_setAccM, (jboolean)1);
+    if (f->ExceptionCheck(env)) f->ExceptionClear(env);
+    jobject val = f->CallObjectMethod(env, field, s_getM, instance);
     if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return nullptr; }
     return val;
 }
 
-// Chama Field.getDouble(instance) → jdouble
-static jdouble FieldGetDouble(JNIEnv* env, jobject field, jobject instance) {
+// Field.getModifiers()
+static jint FieldGetMods(JNIEnv* env, jobject field) {
     auto* f = env->functions;
-    jclass fieldCls = ObjClass(env, field);
-
-    jmethodID setAccM = f->GetMethodID(env, fieldCls, "setAccessible", "(Z)V");
-    if (setAccM) {
-        f->CallObjectMethod(env, field, setAccM, (jboolean)1);
-        if (f->ExceptionCheck(env)) f->ExceptionClear(env);
-    }
-
-    jmethodID getDblM = f->GetMethodID(env, fieldCls, "getDouble",
-                                        "(Ljava/lang/Object;)D");
-    f->DeleteLocalRef(env, fieldCls);
-    if (!getDblM) { f->ExceptionClear(env); return 0.0; }
-
-    // Precisamos chamar getDouble sem variadics. Usamos CallObjectMethod workaround?
-    // Não — usamos a versão double. Mas não temos CallDoubleMethod no stub.
-    // Workaround: chamar get() e converter via doubleValue() se for Double.
-    // Mais fácil: usar a reflexão de Field.getDouble via CallObjectMethod retornando
-    // um Double boxed. Mas getDouble retorna primitivo double...
-    // Solução: chamar Field.get() que retorna Object (autoboxed Double), depois .doubleValue()
-    jmethodID getM = f->GetMethodID(env, ObjClass(env, field), "get",
-                                     "(Ljava/lang/Object;)Ljava/lang/Object;");
-    (void)getDblM; // não usamos
-    if (!getM) { f->ExceptionClear(env); return 0.0; }
-    jobject boxed = f->CallObjectMethod(env, field, getM, instance);
-    if (!boxed || f->ExceptionCheck(env)) { f->ExceptionClear(env); return 0.0; }
-
-    jclass dblCls    = f->FindClass(env, "java/lang/Double");
-    jmethodID dblValM = f->GetMethodID(env, dblCls, "doubleValue", "()D");
-    // Não temos CallDoubleMethod no stub — usar CallObjectMethod não funciona para primitivo.
-    // Workaround final: usar toString() e parsear o valor.
-    jmethodID toStrM = f->GetMethodID(env, dblCls, "toString", "()Ljava/lang/String;");
-    f->DeleteLocalRef(env, dblCls);
-    (void)dblValM;
-    if (!toStrM) { f->ExceptionClear(env); f->DeleteLocalRef(env, boxed); return 0.0; }
-    jstring sval = (jstring)f->CallObjectMethod(env, boxed, toStrM);
-    f->DeleteLocalRef(env, boxed);
-    if (!sval || f->ExceptionCheck(env)) { f->ExceptionClear(env); return 0.0; }
-    const char* cs = f->GetStringUTFChars(env, sval, nullptr);
-    jdouble result = cs ? atof(cs) : 0.0;
-    if (cs) f->ReleaseStringUTFChars(env, sval, cs);
-    f->DeleteLocalRef(env, sval);
-    return result;
+    jint r = f->CallIntMethod(env, field, s_getModsM);
+    if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return 0; }
+    return r;
 }
 
-// ── Heurística: encontra classe com campo static do próprio tipo (singleton) ─
-// Retorna local ref ou nullptr.
+// Field.getType().getName()
+static std::string FieldTypeName(JNIEnv* env, jobject field) {
+    auto* f = env->functions;
+    jobject typeClass = f->CallObjectMethod(env, field, s_getTypeM);
+    if (!typeClass || f->ExceptionCheck(env)) { f->ExceptionClear(env); return ""; }
+    std::string name = GetClassName(env, typeClass);
+    f->DeleteLocalRef(env, typeClass);
+    return name;
+}
+
+// Converte um Double/boxed para double via toString + atof
+// (necessário pois não temos CallDoubleMethod no stub)
+static double BoxedToDouble(JNIEnv* env, jobject boxed) {
+    auto* f = env->functions;
+    if (!boxed) return 0.0;
+    jstring s = (jstring)f->CallObjectMethod(env, boxed, s_toStrM);
+    if (!s || f->ExceptionCheck(env)) { f->ExceptionClear(env); return 0.0; }
+    const char* cs = f->GetStringUTFChars(env, s, nullptr);
+    double r = cs ? atof(cs) : 0.0;
+    if (cs) f->ReleaseStringUTFChars(env, s, cs);
+    f->DeleteLocalRef(env, s);
+    return r;
+}
+
+// Field.get(entity) → double (via boxed Double)
+static double FieldGetDouble(JNIEnv* env, jobject field, jobject instance) {
+    jobject boxed = FieldGet(env, field, instance);
+    if (!boxed) return 0.0;
+    double r = BoxedToDouble(env, boxed);
+    env->functions->DeleteLocalRef(env, boxed);
+    return r;
+}
+
+static bool IsCoordRange(double v) { return v > -60000.0 && v < 60000.0 && v != 0.0; }
+
+// ── Heurística singleton ──────────────────────────────────────────────────────
+// Encontra uma classe com nome curto (sem pacote) que tem campo STATIC do próprio tipo.
+// Em Minecraft vanilla obfuscado, é a classe Minecraft com "theMinecraft".
 static jclass FindSingletonClass(JNIEnv* env, JVMTIEnv* jvmti) {
     auto* t = jvmti->functions;
     auto* f = env->functions;
@@ -191,65 +153,45 @@ static jclass FindSingletonClass(JNIEnv* env, JVMTIEnv* jvmti) {
     if (t->GetLoadedClasses(jvmti, &count, &classes) != JVMTI_ERROR_NONE || !classes)
         return nullptr;
 
-    // Pré-carrega métodos de reflexão (uma vez)
-    jclass classCls = f->FindClass(env, "java/lang/Class");
-    if (!classCls) { f->ExceptionClear(env); return nullptr; }
-    jmethodID getNameM = f->GetMethodID(env, classCls, "getName", "()Ljava/lang/String;");
-    jmethodID gdfM     = f->GetMethodID(env, classCls, "getDeclaredFields",
-                                         "()[Ljava/lang/reflect/Field;");
-    if (!getNameM || !gdfM) { f->ExceptionClear(env); return nullptr; }
-
     static const jint ACC_STATIC = 0x0008;
     jclass result = nullptr;
-    int candidateCount = 0;
 
     for (jint k = 0; k < count && !result; k++) {
-        // Filtra para classes com nome curto (sem pacote = obfuscado)
+        // Filtra: nome curto sem pacote (ex: "Lbib;" ou "Low;")
         char* sig = nullptr;
-        bool isShort = false;
+        bool  ok  = false;
         if (t->GetClassSignature(jvmti, classes[k], &sig, nullptr) == JVMTI_ERROR_NONE && sig) {
             int len = (int)strlen(sig);
-            // Formato "Lxxx;" sem '/' → curta sem pacote
-            isShort = (len <= 7 && strchr(sig, '/') == nullptr);
+            ok = (len <= 7 && strchr(sig, '/') == nullptr);
             t->Deallocate(jvmti, (unsigned char*)sig);
         }
-        if (!isShort) { f->DeleteLocalRef(env, classes[k]); continue; }
+        if (!ok) { f->DeleteLocalRef(env, classes[k]); continue; }
 
-        // Pega nome da classe via getName()
-        jstring nameStr = (jstring)f->CallObjectMethod(env, classes[k], getNameM);
-        if (!nameStr || f->ExceptionCheck(env)) {
-            f->ExceptionClear(env); f->DeleteLocalRef(env, classes[k]); continue;
-        }
-        const char* cn = f->GetStringUTFChars(env, nameStr, nullptr);
-        std::string className = cn ? cn : "";
-        if (cn) f->ReleaseStringUTFChars(env, nameStr, cn);
-        f->DeleteLocalRef(env, nameStr);
+        // Pega nome da classe
+        std::string className = GetClassName(env, classes[k]);
+        if (className.empty()) { f->DeleteLocalRef(env, classes[k]); continue; }
 
-        // getDeclaredFields
-        jobject fieldsArr = f->CallObjectMethod(env, classes[k], gdfM);
-        if (!fieldsArr || f->ExceptionCheck(env)) {
-            f->ExceptionClear(env); f->DeleteLocalRef(env, classes[k]); continue;
-        }
+        // getDeclaredFields() do classes[k] (um jclass = java.lang.Class instance)
+        jobject fieldsArr = GetDeclaredFields(env, classes[k]);
+        if (!fieldsArr) { f->DeleteLocalRef(env, classes[k]); continue; }
 
-        jsize fieldCount = f->GetArrayLength(env, fieldsArr);
-
-        for (jsize fi = 0; fi < fieldCount; fi++) {
-            jobject field = f->GetObjectArrayElement(env, fieldsArr, fi);
+        jsize n = f->GetArrayLength(env, fieldsArr);
+        for (jsize i = 0; i < n; i++) {
+            jobject field = f->GetObjectArrayElement(env, fieldsArr, i);
             if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
 
-            jint mods = FieldGetModifiers(env, field);
-            if (!(mods & ACC_STATIC)) { f->DeleteLocalRef(env, field); continue; }
-
-            std::string typeName = FieldTypeName(env, field);
-            f->DeleteLocalRef(env, field);
-
-            if (typeName == className) {
-                candidateCount++;
-                std::cout << "[+] SDK: encontrado singleton candidato: " << className
-                          << " (" << fieldCount << " campos)" << std::endl;
-                result = classes[k];
-                break;
+            jint mods = FieldGetMods(env, field);
+            if (mods & ACC_STATIC) {
+                std::string typeName = FieldTypeName(env, field);
+                if (typeName == className) {
+                    std::cout << "[+] SDK: singleton candidato: " << className
+                              << " (" << n << " campos)" << std::endl;
+                    result = classes[k];
+                    f->DeleteLocalRef(env, field);
+                    break;
+                }
             }
+            f->DeleteLocalRef(env, field);
         }
         f->DeleteLocalRef(env, fieldsArr);
         if (!result) f->DeleteLocalRef(env, classes[k]);
@@ -259,138 +201,131 @@ static jclass FindSingletonClass(JNIEnv* env, JVMTIEnv* jvmti) {
     for (jint k = 0; k < count; k++)
         if (classes[k] != result) f->DeleteLocalRef(env, classes[k]);
     t->Deallocate(jvmti, (unsigned char*)classes);
-
-    if (candidateCount > 1)
-        std::cout << "[!] SDK: " << candidateCount << " singletons encontrados — usando o primeiro." << std::endl;
-
     return result;
 }
 
-// ── Navega campos do Minecraft para encontrar a List de jogadores próximos ───
-// Procura campos de tipo List dentro de campos Object do Minecraft.
-// Valida que a List contém objetos com double fields em faixa de coordenadas.
-static bool IsCoordRange(double v) { return v > -60000.0 && v < 60000.0 && v != 0.0; }
-
-static jobject FindPlayerEntityList(JNIEnv* env, jobject mcInstance) {
+// ── Pega a instância singleton do campo static do próprio tipo ────────────────
+static jobject GetSingletonInstance(JNIEnv* env, jclass cls, const std::string& className) {
     auto* f = env->functions;
+    static const jint ACC_STATIC = 0x0008;
 
-    // getDeclaredFields do Minecraft
-    jclass mcCls     = ObjClass(env, mcInstance);
-    jobject fieldsArr = f->CallObjectMethod(env, mcCls,
-        f->GetMethodID(env, mcCls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;"),
-        nullptr);
-    f->DeleteLocalRef(env, mcCls);
-    if (!fieldsArr || f->ExceptionCheck(env)) { f->ExceptionClear(env); return nullptr; }
+    // getDeclaredFields em cls (que é o java.lang.Class para a classe singleton)
+    jobject fieldsArr = GetDeclaredFields(env, cls);
+    if (!fieldsArr) return nullptr;
 
     jsize n = f->GetArrayLength(env, fieldsArr);
+    jobject result = nullptr;
 
-    // Para cada campo Object de Minecraft:
-    for (jsize i = 0; i < n; i++) {
+    for (jsize i = 0; i < n && !result; i++) {
         jobject field = f->GetObjectArrayElement(env, fieldsArr, i);
         if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
 
+        jint mods = FieldGetMods(env, field);
+        if ((mods & ACC_STATIC) && FieldTypeName(env, field) == className) {
+            // Pega valor do campo estático
+            result = FieldGet(env, field, nullptr); // null = static field
+        }
+        f->DeleteLocalRef(env, field);
+    }
+    f->DeleteLocalRef(env, fieldsArr);
+    return result;
+}
+
+// ── Encontra List de entidades navegando campos do Minecraft ──────────────────
+// Procura em dois níveis: campos do Minecraft → campos do World → List
+static jobject FindPlayerEntityList(JNIEnv* env, jobject mcInstance, jclass mcCls) {
+    auto* f = env->functions;
+    static const jint ACC_STATIC = 0x0008;
+
+    // getDeclaredFields do Minecraft
+    jobject mcFields = GetDeclaredFields(env, mcCls);
+    if (!mcFields) return nullptr;
+
+    jsize mcFieldCount = f->GetArrayLength(env, mcFields);
+
+    for (jsize i = 0; i < mcFieldCount; i++) {
+        jobject field = f->GetObjectArrayElement(env, mcFields, i);
+        if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
+
+        // Pula static e primitivos
+        jint mods = FieldGetMods(env, field);
+        if (mods & ACC_STATIC) { f->DeleteLocalRef(env, field); continue; }
+
         std::string typeName = FieldTypeName(env, field);
-        // Pula primitivos e strings
-        bool isObj = !typeName.empty() && typeName[0] != '[' &&
-                     typeName != "int" && typeName != "float" &&
-                     typeName != "double" && typeName != "boolean" &&
-                     typeName != "long" && typeName != "byte" &&
-                     typeName != "short" && typeName != "char" &&
-                     typeName != "java.lang.String";
+        bool isObj = (!typeName.empty() && typeName[0] != '[' &&
+                      typeName != "int"  && typeName != "float"   &&
+                      typeName != "double" && typeName != "boolean" &&
+                      typeName != "long"  && typeName != "byte"   &&
+                      typeName != "short" && typeName != "char"   &&
+                      typeName != "java.lang.String");
         if (!isObj) { f->DeleteLocalRef(env, field); continue; }
 
         jobject fieldVal = FieldGet(env, field, mcInstance);
         f->DeleteLocalRef(env, field);
         if (!fieldVal || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
 
-        // Verifica campos do objeto (procura List)
-        jclass valCls    = ObjClass(env, fieldVal);
-        jobject subFields = nullptr;
-        {
-            jmethodID gdfM = f->GetMethodID(env, valCls, "getDeclaredFields",
-                                             "()[Ljava/lang/reflect/Field;");
-            if (gdfM) subFields = f->CallObjectMethod(env, valCls, gdfM);
-            if (f->ExceptionCheck(env)) f->ExceptionClear(env);
-        }
+        // Nível 2: itera campos do objeto apontado por fieldVal
+        jclass valCls   = f->GetObjectClass(env, fieldVal);
+        jobject subFields = GetDeclaredFields(env, valCls);
         f->DeleteLocalRef(env, valCls);
 
         if (!subFields) { f->DeleteLocalRef(env, fieldVal); continue; }
 
         jsize sn = f->GetArrayLength(env, subFields);
-        for (jsize si = 0; si < sn; si++) {
+        jobject found = nullptr;
+
+        for (jsize si = 0; si < sn && !found; si++) {
             jobject sf = f->GetObjectArrayElement(env, subFields, si);
             if (!sf || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
 
             std::string sfType = FieldTypeName(env, sf);
-            // List contém java.util.List no tipo
-            bool isList = (sfType.find("List") != std::string::npos ||
-                           sfType.find("ArrayList") != std::string::npos ||
-                           sfType.find("AbstractList") != std::string::npos);
+            bool isList = (sfType.find("List") != std::string::npos);
             if (!isList) { f->DeleteLocalRef(env, sf); continue; }
 
             jobject listVal = FieldGet(env, sf, fieldVal);
             f->DeleteLocalRef(env, sf);
             if (!listVal || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
 
-            // Verifica tamanho da lista
-            jclass listCls = ObjClass(env, listVal);
-            jmethodID sizeM = f->GetMethodID(env, listCls, "size", "()I");
-            f->DeleteLocalRef(env, listCls);
-            if (!sizeM) { f->ExceptionClear(env); f->DeleteLocalRef(env, listVal); continue; }
-            jint sz = f->CallIntMethod(env, listVal, sizeM);
+            // Verifica tamanho
+            jint sz = f->CallIntMethod(env, listVal, s_listSizeM);
             if (f->ExceptionCheck(env)) { f->ExceptionClear(env); f->DeleteLocalRef(env, listVal); continue; }
             if (sz == 0) { f->DeleteLocalRef(env, listVal); continue; }
 
-            // Pega primeiro elemento e verifica se tem campos double em faixa de coordenadas
-            jclass listCls2 = ObjClass(env, listVal);
-            jmethodID getM  = f->GetMethodID(env, listCls2, "get", "(I)Ljava/lang/Object;");
-            f->DeleteLocalRef(env, listCls2);
-            if (!getM) { f->ExceptionClear(env); f->DeleteLocalRef(env, listVal); continue; }
-            jobject elem = f->CallObjectMethod(env, listVal, getM, (jint)0);
+            // Verifica se o primeiro elemento tem 3 campos double com coords razoáveis
+            jobject elem = f->CallObjectMethod(env, listVal, s_listGetM, (jint)0);
             if (!elem || f->ExceptionCheck(env)) { f->ExceptionClear(env); f->DeleteLocalRef(env, listVal); continue; }
 
-            // Conta campos double com valores razoáveis de coordenada
-            jclass elemCls = ObjClass(env, elem);
-            jobject elemFields = nullptr;
-            {
-                jmethodID gdfM = f->GetMethodID(env, elemCls, "getDeclaredFields",
-                                                 "()[Ljava/lang/reflect/Field;");
-                if (gdfM) elemFields = f->CallObjectMethod(env, elemCls, gdfM);
-                if (f->ExceptionCheck(env)) f->ExceptionClear(env);
-            }
+            jclass elemCls   = f->GetObjectClass(env, elem);
+            jobject elemFlds = GetDeclaredFields(env, elemCls);
             f->DeleteLocalRef(env, elemCls);
+
             int coordCount = 0;
-            if (elemFields) {
-                jsize en = f->GetArrayLength(env, elemFields);
+            if (elemFlds) {
+                jsize en = f->GetArrayLength(env, elemFlds);
                 for (jsize ei = 0; ei < en && coordCount < 3; ei++) {
-                    jobject ef = f->GetObjectArrayElement(env, elemFields, ei);
+                    jobject ef = f->GetObjectArrayElement(env, elemFlds, ei);
                     if (!ef || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
                     if (FieldTypeName(env, ef) == "double") {
-                        jdouble dv = FieldGetDouble(env, ef, elem);
+                        double dv = FieldGetDouble(env, ef, elem);
                         if (IsCoordRange(dv)) coordCount++;
                     }
                     f->DeleteLocalRef(env, ef);
                 }
-                f->DeleteLocalRef(env, elemFields);
+                f->DeleteLocalRef(env, elemFlds);
             }
             f->DeleteLocalRef(env, elem);
 
             if (coordCount >= 3) {
-                // Encontrou! Retorna global ref para a lista
-                f->DeleteLocalRef(env, subFields);
-                f->DeleteLocalRef(env, fieldVal);
-                f->DeleteLocalRef(env, fieldsArr);
-                jobject globalList = f->NewGlobalRef(env, listVal);
-                f->DeleteLocalRef(env, listVal);
-                std::cout << "[+] SDK: playerEntities encontrado via heurística (" << sz << " jogadores)." << std::endl;
-                return globalList;
+                std::cout << "[+] SDK: lista de jogadores encontrada (" << sz << " entidades)." << std::endl;
+                found = f->NewGlobalRef(env, listVal);
             }
             f->DeleteLocalRef(env, listVal);
         }
         f->DeleteLocalRef(env, subFields);
         f->DeleteLocalRef(env, fieldVal);
+        if (found) { f->DeleteLocalRef(env, mcFields); return found; }
     }
-    f->DeleteLocalRef(env, fieldsArr);
+    f->DeleteLocalRef(env, mcFields);
     return nullptr;
 }
 
@@ -399,128 +334,90 @@ static bool InitSDK(JNIEnv* env) {
     if (g_initDone) return !g_initFailed;
     g_initDone = true;
 
+    if (!CacheReflectMethods(env)) {
+        std::cout << "[-] SDK: falha ao cachear metodos de reflexao." << std::endl;
+        g_initFailed = true; return false;
+    }
+
     JVMTIEnv* jvmti = JNIUtils::GetJVMTIEnv();
     if (!jvmti) {
         std::cout << "[-] SDK: JVMTI nao disponivel." << std::endl;
-        g_initFailed = true;
-        return false;
+        g_initFailed = true; return false;
     }
 
-    // 1. Encontra a classe singleton do Minecraft
+    // 1. Encontra a classe singleton
     jclass localMcClass = FindSingletonClass(env, jvmti);
     if (!localMcClass) {
-        std::cout << "[-] SDK: nao encontrou classe singleton Minecraft." << std::endl;
-        g_initFailed = true;
-        return false;
+        std::cout << "[-] SDK: classe singleton nao encontrada." << std::endl;
+        g_initFailed = true; return false;
     }
     g_mcClass = (jclass)env->functions->NewGlobalRef(env, localMcClass);
     env->functions->DeleteLocalRef(env, localMcClass);
-    std::string mcName = ClassName(env, g_mcClass);
-    std::cout << "[+] SDK: classe Minecraft encontrada: " << mcName << std::endl;
+    std::string mcName = GetClassName(env, g_mcClass);
+    std::cout << "[+] SDK: classe Minecraft: " << mcName << std::endl;
 
-    // 2. Pega instância singleton via getDeclaredFields (campo static do próprio tipo)
-    {
-        auto* f = env->functions;
-        jclass mcCls     = ObjClass(env, g_mcClass);
-        jobject fieldsArr = f->CallObjectMethod(env, mcCls,
-            f->GetMethodID(env, mcCls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;"),
-            nullptr);
-        f->DeleteLocalRef(env, mcCls);
-        if (!fieldsArr || f->ExceptionCheck(env)) {
-            f->ExceptionClear(env);
-            std::cout << "[-] SDK: getDeclaredFields falhou." << std::endl;
-            g_initFailed = true;
-            return false;
-        }
-        jsize n = f->GetArrayLength(env, fieldsArr);
-        static const jint ACC_STATIC = 0x0008;
-        for (jsize i = 0; i < n && !g_mcInstance; i++) {
-            jobject field = f->GetObjectArrayElement(env, fieldsArr, i);
-            if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
-            jint mods = FieldGetModifiers(env, field);
-            if ((mods & ACC_STATIC) && FieldTypeName(env, field) == mcName) {
-                jobject inst = FieldGet(env, field, nullptr);
-                if (inst) {
-                    g_mcInstance = f->NewGlobalRef(env, inst);
-                    f->DeleteLocalRef(env, inst);
-                }
-            }
-            f->DeleteLocalRef(env, field);
-        }
-        f->DeleteLocalRef(env, fieldsArr);
+    // 2. Pega a instância singleton
+    jobject inst = GetSingletonInstance(env, g_mcClass, mcName);
+    if (!inst) {
+        std::cout << "[-] SDK: instancia singleton nula (jogo ainda inicializando?)." << std::endl;
+        g_initFailed = true; return false;
     }
-    if (!g_mcInstance) {
-        std::cout << "[-] SDK: instancia Minecraft nao encontrada (null)." << std::endl;
-        g_initFailed = true;
-        return false;
-    }
+    g_mcInstance = env->functions->NewGlobalRef(env, inst);
+    env->functions->DeleteLocalRef(env, inst);
     std::cout << "[+] SDK: instancia Minecraft obtida." << std::endl;
 
-    // 3. Encontra lista de jogadores
-    g_entityList = FindPlayerEntityList(env, g_mcInstance);
+    // 3. Encontra a lista de jogadores
+    g_entityList = FindPlayerEntityList(env, g_mcInstance, g_mcClass);
     if (!g_entityList) {
         std::cout << "[-] SDK: lista de jogadores nao encontrada." << std::endl;
-        g_initFailed = true;
-        return false;
+        g_initFailed = true; return false;
     }
 
     std::cout << "[+] SDK: inicializacao completa!" << std::endl;
     return true;
 }
 
-// ── API publica ───────────────────────────────────────────────────────────────
-
-// Campos de posição cacheados por classe de entidade
-static jclass  g_entClass = nullptr;
-static jobject g_posXField = nullptr; // global ref para Field de posX
-static jobject g_posYField = nullptr;
-static jobject g_posZField = nullptr;
-
+// ── Cache dos campos double de posição ────────────────────────────────────────
 static bool CacheEntityFields(JNIEnv* env, jobject entity) {
     if (g_posXField) return true;
     auto* f = env->functions;
-    jclass eCls = ObjClass(env, entity);
-    jmethodID gdfM = f->GetMethodID(env, eCls, "getDeclaredFields",
-                                     "()[Ljava/lang/reflect/Field;");
-    if (!gdfM) { f->ExceptionClear(env); f->DeleteLocalRef(env, eCls); return false; }
-    jobject fieldsArr = f->CallObjectMethod(env, eCls, gdfM);
+    jclass eCls = f->GetObjectClass(env, entity);
+    jobject fieldsArr = GetDeclaredFields(env, eCls);
     f->DeleteLocalRef(env, eCls);
-    if (!fieldsArr || f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
+    if (!fieldsArr) return false;
 
     jsize n = f->GetArrayLength(env, fieldsArr);
-    // Coleta campos double com coordenadas razoáveis em ordem: os três primeiros são posX,Y,Z
+    jobject cands[3] = {};
     int found = 0;
-    jobject candidates[3] = {};
+
     for (jsize i = 0; i < n && found < 3; i++) {
         jobject field = f->GetObjectArrayElement(env, fieldsArr, i);
         if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
         if (FieldTypeName(env, field) == "double") {
-            jdouble v = FieldGetDouble(env, field, entity);
-            if (IsCoordRange(v)) {
-                candidates[found++] = field;
-                continue;
-            }
+            double dv = FieldGetDouble(env, field, entity);
+            if (IsCoordRange(dv)) { cands[found++] = field; continue; }
         }
         f->DeleteLocalRef(env, field);
     }
     f->DeleteLocalRef(env, fieldsArr);
+
     if (found < 3) {
-        for (int i = 0; i < found; i++) f->DeleteLocalRef(env, candidates[i]);
+        for (int i = 0; i < found; i++) f->DeleteLocalRef(env, cands[i]);
         return false;
     }
-    g_posXField = f->NewGlobalRef(env, candidates[0]);
-    g_posYField = f->NewGlobalRef(env, candidates[1]);
-    g_posZField = f->NewGlobalRef(env, candidates[2]);
-    for (int i = 0; i < 3; i++) f->DeleteLocalRef(env, candidates[i]);
+    g_posXField = f->NewGlobalRef(env, cands[0]);
+    g_posYField = f->NewGlobalRef(env, cands[1]);
+    g_posZField = f->NewGlobalRef(env, cands[2]);
+    for (int i = 0; i < 3; i++) f->DeleteLocalRef(env, cands[i]);
     std::cout << "[+] SDK: campos posX/Y/Z cacheados." << std::endl;
     return true;
 }
 
+// ── API pública ───────────────────────────────────────────────────────────────
+
 bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
     JNIEnv* env = Env();
     if (!env) return false;
-
-    // Retry se init falhou
     if (g_initFailed) { g_initDone = false; g_initFailed = false; }
     if (!InitSDK(env)) {
         g_retryCount++;
@@ -530,17 +427,11 @@ bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
     }
 
     auto* f = env->functions;
-    jclass listCls  = ObjClass(env, g_entityList);
-    jmethodID sizeM = f->GetMethodID(env, listCls, "size", "()I");
-    jmethodID getM  = f->GetMethodID(env, listCls, "get",  "(I)Ljava/lang/Object;");
-    f->DeleteLocalRef(env, listCls);
-    if (!sizeM || !getM) { f->ExceptionClear(env); return false; }
-
-    jint count = f->CallIntMethod(env, g_entityList, sizeM);
+    jint count = f->CallIntMethod(env, g_entityList, s_listSizeM);
     if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
 
     for (jint i = 0; i < count; i++) {
-        jobject entity = f->CallObjectMethod(env, g_entityList, getM, i);
+        jobject entity = f->CallObjectMethod(env, g_entityList, s_listGetM, i);
         if (!entity || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
 
         if (!CacheEntityFields(env, entity)) { f->DeleteLocalRef(env, entity); continue; }
@@ -556,21 +447,15 @@ bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
 }
 
 bool Minecraft::GetCameraInfo(CameraInfo& out) {
-    if (!g_initDone) {
-        JNIEnv* env = Env();
-        if (!env) return false;
-        if (g_initFailed) { g_initDone = false; g_initFailed = false; }
-        if (!InitSDK(env)) return false;
-    }
+    JNIEnv* env = Env();
+    if (!env) return false;
+    if (g_initFailed) { g_initDone = false; g_initFailed = false; }
+    if (!InitSDK(env)) return false;
     if (!g_entityList) return false;
 
-    // Para a câmera, pega as coordenadas do primeiro elemento da lista
-    // (em singleplayer é o único jogador; em multiplayer é o mais próximo do servidor)
-    // TODO: identificar o local player pelo nome de usuário
     std::vector<EntityInfo> tmp;
     if (!GetNearbyPlayers(tmp) || tmp.empty()) return false;
 
-    // Usa o primeiro como referência de câmera (impreciso em multiplayer)
     out.eyeX  = tmp[0].posX;
     out.eyeY  = tmp[0].posY + 1.62;
     out.eyeZ  = tmp[0].posZ;

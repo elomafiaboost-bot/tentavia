@@ -90,7 +90,12 @@ struct JNINativeInterface_ {
     // 49
     jint     (JNICALL *CallIntMethod)(JNIEnv*, jobject, jmethodID, ...);
 
-    void* _pad50_93[44];            // 50-93 CallInt[V/A] .. CallNonvirtualVoidA
+    void* _pad50_60[11];            // 50-60
+
+    // 61
+    void     (JNICALL *CallVoidMethod)(JNIEnv*, jobject, jmethodID, ...);
+
+    void* _pad62_93[32];            // 62-93 CallVoid[V/A] .. CallNonvirtualVoidA
 
     // 94
     jfieldID (JNICALL *GetFieldID)(JNIEnv*, jclass, const char*, const char*);
