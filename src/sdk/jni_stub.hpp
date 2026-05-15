@@ -80,7 +80,12 @@ struct JNINativeInterface_ {
     // 34 – variadic; cobre todos os tipos de argumento via ...
     jobject  (JNICALL *CallObjectMethod)(JNIEnv*, jobject, jmethodID, ...);
 
-    void* _pad35_48[14];            // 35-48 CallObject[V/A] .. CallShort[V/A]
+    void* _pad35_36[2];             // 35-36 CallObjectMethodV, CallObjectMethodA
+
+    // 37
+    jboolean (JNICALL *CallBooleanMethod)(JNIEnv*, jobject, jmethodID, ...);
+
+    void* _pad38_48[11];            // 38-48 CallBoolean[V/A] .. CallShort[V/A]
 
     // 49
     jint     (JNICALL *CallIntMethod)(JNIEnv*, jobject, jmethodID, ...);

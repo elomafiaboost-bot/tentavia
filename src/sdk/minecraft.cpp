@@ -16,6 +16,7 @@ static jclass  g_mcClass     = nullptr;
 static jclass  g_worldClass  = nullptr;  // classe do objeto world em runtime
 static bool    g_initDone    = false;
 static bool    g_initFailed  = false;
+static int     g_retryCount  = 0;
 
 static JNIEnv* Env() { return JNIUtils::GetJNIEnv(); }
 
@@ -26,8 +27,11 @@ static bool InitClasses(JNIEnv* env) {
 
     jclass local = JNIUtils::FindMinecraftClass(env, Classes::Minecraft);
     if (!local) {
-        std::cout << "[-] SDK: FindMinecraftClass(Minecraft) falhou. "
-                     "Classloader nao tem acesso ainda?" << std::endl;
+        g_retryCount++;
+        // Loga apenas nas primeiras tentativas e depois a cada 60 frames (~1s)
+        if (g_retryCount <= 3 || (g_retryCount % 60) == 0)
+            std::cout << "[-] SDK: FindMinecraftClass(Minecraft) falhou (tentativa "
+                      << g_retryCount << "). Aguardando classloader..." << std::endl;
         g_initFailed = true;
         return false;
     }
