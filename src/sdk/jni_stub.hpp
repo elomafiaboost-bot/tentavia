@@ -114,7 +114,15 @@ struct JNINativeInterface_ {
     // 114 – variadic
     jobject  (JNICALL *CallStaticObjectMethod)(JNIEnv*, jclass, jmethodID, ...);
 
-    void* _pad115_166[52];          // 115-166
+    void* _pad115_143[29];          // 115-143
+
+    // 144
+    jfieldID (JNICALL *GetStaticFieldID)(JNIEnv*, jclass, const char*, const char*);
+
+    // 145 – retorna valor de field estático de tipo objeto
+    jobject  (JNICALL *GetStaticObjectField)(JNIEnv*, jclass, jfieldID);
+
+    void* _pad146_166[21];          // 146-166
 
     // 167
     jstring     (JNICALL *NewStringUTF)(JNIEnv*, const char*);
@@ -127,7 +135,15 @@ struct JNINativeInterface_ {
     // 170
     void        (JNICALL *ReleaseStringUTFChars)(JNIEnv*, jstring, const char*);
 
-    void* _pad171_227[57];          // 171-227
+    // 171
+    jsize    (JNICALL *GetArrayLength)(JNIEnv*, jobject array);
+
+    void* _pad172;                  // 172 NewObjectArray
+
+    // 173
+    jobject  (JNICALL *GetObjectArrayElement)(JNIEnv*, jobject array, jsize index);
+
+    void* _pad174_227[54];          // 174-227
 
     // 228
     jboolean (JNICALL *ExceptionCheck)(JNIEnv*);
