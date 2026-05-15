@@ -1,4 +1,5 @@
 #include "esp.hpp"
+#include "../sdk/gl_capture.hpp"
 #include "../sdk/minecraft.hpp"
 #include "../menu/menu.hpp"
 #include <GL/gl.h>
@@ -9,11 +10,35 @@
 
 namespace ESP {
 
-// ── Projeção 3D→2D ─────────────────────────────────────────────────────────
-// Reconstrói a matriz view a partir de yaw/pitch do jogador (igual ao MC 1.8).
-// MC aplica: Rx(pitch) * Ry(yaw+180) * T(-eye)
-// Ponto em frente da câmera tem vz < 0 (convenção OpenGL -Z forward).
+// ── Proje��o usando matrizes GL capturadas pelo hook ─────────────────────────
+// Equiv. ao projectToScreen() do aimbot do projeto de refer�ncia.
+// mv = modelview j� com offset de centro aplicado, pr = projection.
+// Retorna false se o ponto est� atr�s da c�mera.
+static bool MatrixProject(const float* mv, const float* pr,
+                           float mx, float my, float mz,
+                           int sw, int sh,
+                           float& sx, float& sy)
+{
+    // Espa�o de vis�o: MV * [mx, my, mz, 1]
+    float vx = mv[0]*mx + mv[4]*my + mv[ 8]*mz + mv[12];
+    float vy = mv[1]*mx + mv[5]*my + mv[ 9]*mz + mv[13];
+    float vz = mv[2]*mx + mv[6]*my + mv[10]*mz + mv[14];
+    float vw = mv[3]*mx + mv[7]*my + mv[11]*mz + mv[15];
 
+    // Clip space: Proj * viewPos
+    float cx = pr[0]*vx + pr[4]*vy + pr[ 8]*vz + pr[12]*vw;
+    float cy = pr[1]*vx + pr[5]*vy + pr[ 9]*vz + pr[13]*vw;
+    float cw = pr[3]*vx + pr[7]*vy + pr[11]*vz + pr[15]*vw;
+
+    if (cw <= 0.00001f) return false;
+
+    // NDC → tela (Y invertido: OpenGL Y-up, tela Y-down)
+    sx = ((cx / cw) + 1.0f) * 0.5f * (float)sw;
+    sy = (1.0f - (cy / cw + 1.0f) * 0.5f) * (float)sh;
+    return true;
+}
+
+// ── Proje��o 3D→2D via yaw/pitch (fallback JNI) ──────────────────────────────
 static bool WorldToScreen(
     double wx, double wy, double wz,
     double camX, double camY, double camZ,
@@ -25,29 +50,27 @@ static bool WorldToScreen(
     float dy = (float)(wy - camY);
     float dz = (float)(wz - camZ);
 
-    // Ry(yaw + 180)
     float yr  = (yaw + 180.0f) * 3.14159265f / 180.0f;
     float sinY = sinf(yr), cosY = cosf(yr);
     float d1x =  dx * cosY + dz * sinY;
     float d1y =  dy;
     float d1z = -dx * sinY + dz * cosY;
 
-    // Rx(pitch)
     float pr   = pitch * 3.14159265f / 180.0f;
     float sinP = sinf(pr), cosP = cosf(pr);
     float vx   = d1x;
     float vy   = d1y * cosP - d1z * sinP;
     float vz   = d1y * sinP + d1z * cosP;
 
-    if (-vz <= 0.001f) return false; // atrás da câmera
+    if (-vz <= 0.001f) return false;
 
     float tanH = tanf(fovY * 0.5f * 3.14159265f / 180.0f);
     sx = ((vx / (-vz * tanH * aspect)) + 1.0f) * 0.5f * (float)sw;
-    sy = ((vy / (-vz * tanH) * -1.0f)  + 1.0f) * 0.5f * (float)sh; // y-down
+    sy = ((vy / (-vz * tanH) * -1.0f)  + 1.0f) * 0.5f * (float)sh;
     return true;
 }
 
-// ── Helpers de desenho ────────────────────────────────────────────────────────
+// ── Helpers de desenho ─────────────────────────────────────────────────────────
 
 static void BoxOutline(float bx, float by, float bw, float bh,
                        float r, float g, float b, float a)
@@ -61,26 +84,21 @@ static void BoxOutline(float bx, float by, float bw, float bh,
     glEnd();
 }
 
-// Cantos estilo "L" — visual limpo sem poluir o centro
 static void CornerBox(float bx, float by, float bw, float bh,
                       float r, float g, float b, float a)
 {
     float cw = bw * 0.25f;
     float ch = bh * 0.25f;
 
-    glColor4f(0.0f, 0.0f, 0.0f, a * 0.6f); // sombra preta
+    glColor4f(0.0f, 0.0f, 0.0f, a * 0.6f);
     glLineWidth(2.8f);
     glBegin(GL_LINES);
-    // top-left
     glVertex2f(bx - 1,      by - 1);  glVertex2f(bx + cw - 1, by - 1);
     glVertex2f(bx - 1,      by - 1);  glVertex2f(bx - 1,       by + ch - 1);
-    // top-right
     glVertex2f(bx + bw + 1, by - 1);  glVertex2f(bx + bw - cw + 1, by - 1);
     glVertex2f(bx + bw + 1, by - 1);  glVertex2f(bx + bw + 1, by + ch - 1);
-    // bottom-left
     glVertex2f(bx - 1,      by + bh + 1); glVertex2f(bx + cw - 1, by + bh + 1);
     glVertex2f(bx - 1,      by + bh + 1); glVertex2f(bx - 1,       by + bh - ch + 1);
-    // bottom-right
     glVertex2f(bx + bw + 1, by + bh + 1); glVertex2f(bx + bw - cw + 1, by + bh + 1);
     glVertex2f(bx + bw + 1, by + bh + 1); glVertex2f(bx + bw + 1, by + bh - ch + 1);
     glEnd();
@@ -99,18 +117,15 @@ static void CornerBox(float bx, float by, float bw, float bh,
     glEnd();
 }
 
-// Barra de vida simples (verde→vermelho) — usa posY para simular HP 20/20
 static void HealthBar(float bx, float by, float bh) {
-    float hp = 1.0f; // sem API de HP por agora — full verde
+    float hp  = 1.0f;
     float barH = bh * hp;
     float barX = bx - 4.5f;
-    // fundo escuro
     glColor4f(0.0f, 0.0f, 0.0f, 0.55f);
     glBegin(GL_QUADS);
     glVertex2f(barX, by); glVertex2f(barX + 2, by);
     glVertex2f(barX + 2, by + bh); glVertex2f(barX, by + bh);
     glEnd();
-    // barra colorida
     float gr = 1.0f - hp, re = hp;
     glColor4f(re * 0.9f, gr * 0.85f + 0.15f, 0.1f, 0.85f);
     glBegin(GL_QUADS);
@@ -119,8 +134,54 @@ static void HealthBar(float bx, float by, float bh) {
     glEnd();
 }
 
-// ── Lookup de feature no menu ─────────────────────────────────────────────────
+// ── Bounding box a partir de 8 cantos em espa�o de modelo ────────────────────
+// Cantos do hitbox de jogador: Radius(0.8, 2.0, 0.8) / 2 (igual ao refer�ncia)
+static const float PLAYER_HX = 0.4f, PLAYER_HZ = 0.4f;
+static const float PLAYER_CORNERS[8][3] = {
+    {-PLAYER_HX, -1.0f, -PLAYER_HZ}, { PLAYER_HX, -1.0f, -PLAYER_HZ},
+    { PLAYER_HX, -1.0f,  PLAYER_HZ}, {-PLAYER_HX, -1.0f,  PLAYER_HZ},
+    {-PLAYER_HX,  1.0f, -PLAYER_HZ}, { PLAYER_HX,  1.0f, -PLAYER_HZ},
+    { PLAYER_HX,  1.0f,  PLAYER_HZ}, {-PLAYER_HX,  1.0f,  PLAYER_HZ},
+};
 
+// Hitbox ba�: Radius(1.0, 1.0, 1.0) / 2
+static const float CHEST_H = 0.5f;
+static const float CHEST_CORNERS[8][3] = {
+    {-CHEST_H, -CHEST_H, -CHEST_H}, { CHEST_H, -CHEST_H, -CHEST_H},
+    { CHEST_H, -CHEST_H,  CHEST_H}, {-CHEST_H, -CHEST_H,  CHEST_H},
+    {-CHEST_H,  CHEST_H, -CHEST_H}, { CHEST_H,  CHEST_H, -CHEST_H},
+    { CHEST_H,  CHEST_H,  CHEST_H}, {-CHEST_H,  CHEST_H,  CHEST_H},
+};
+
+// Hitbox ba� duplo: Radius(2.0, 1.0, 1.0) / 2
+static const float LARGE_CORNERS[8][3] = {
+    {-1.0f, -CHEST_H, -CHEST_H}, { 1.0f, -CHEST_H, -CHEST_H},
+    { 1.0f, -CHEST_H,  CHEST_H}, {-1.0f, -CHEST_H,  CHEST_H},
+    {-1.0f,  CHEST_H, -CHEST_H}, { 1.0f,  CHEST_H, -CHEST_H},
+    { 1.0f,  CHEST_H,  CHEST_H}, {-1.0f,  CHEST_H,  CHEST_H},
+};
+
+static bool CalcBBox(const GLCapture::Entity& e,
+                     const float corners[][3], int nCorners,
+                     int sw, int sh,
+                     float& minX, float& maxX, float& minY, float& maxY)
+{
+    minX = 1e9f; maxX = -1e9f;
+    minY = 1e9f; maxY = -1e9f;
+    bool any = false;
+    for (int i = 0; i < nCorners; i++) {
+        float sx, sy;
+        if (MatrixProject(e.mv, e.pr, corners[i][0], corners[i][1], corners[i][2],
+                          sw, sh, sx, sy)) {
+            any = true;
+            if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
+            if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
+        }
+    }
+    return any;
+}
+
+// ── Lookup de feature no menu ─────────────────────────────────────────────────
 static bool IsEnabled(const char* name) {
     for (auto& tab : Menu::tabs)
         for (auto& ft : tab.features)
@@ -128,41 +189,40 @@ static bool IsEnabled(const char* name) {
     return false;
 }
 
-// ── Render ────────────────────────────────────────────────────────────────────
-
-// Desenha um pequeno quadrado colorido no canto para confirmar que ESP está rodando
-static void DrawDebugDot(int sw, int sh, bool jniOk) {
-    glPushAttrib(GL_ALL_ATTRIB_BITS);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_TEXTURE_2D);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    // Verde = JNI funcionando, Vermelho = JNI falhou
-    if (jniOk) glColor4f(0.0f, 1.0f, 0.2f, 0.9f);
-    else        glColor4f(1.0f, 0.1f, 0.1f, 0.9f);
-    float bx = (float)sw - 10.f, by = (float)sh - 10.f;
+// ── Dot de debug no canto ────────────────────────────────────────────────────
+// Verde = captura GL ativa | Azul = JNI ativo | Vermelho = nada funcionando
+static void DrawDebugDot(bool glOk, bool jniOk) {
+    if (glOk)       glColor4f(0.0f, 1.0f, 0.2f, 1.0f); // verde
+    else if (jniOk) glColor4f(0.2f, 0.5f, 1.0f, 1.0f); // azul
+    else            glColor4f(1.0f, 0.1f, 0.1f, 1.0f); // vermelho
     glBegin(GL_QUADS);
-    glVertex2f(bx, by); glVertex2f(bx+8, by);
-    glVertex2f(bx+8, by+8); glVertex2f(bx, by+8);
+    glVertex2f(0.f,  0.f);
+    glVertex2f(16.f, 0.f);
+    glVertex2f(16.f, 16.f);
+    glVertex2f(0.f,  16.f);
     glEnd();
-    glPopAttrib();
 }
 
+// ── Render ────────────────────────────────────────────────────────────────────
 void Render(int sw, int sh) {
-    bool espOn     = IsEnabled("ESP");
-    bool tracersOn = IsEnabled("Tracers");
-    if (!espOn && !tracersOn) return;
+    bool espOn    = IsEnabled("ESP");
+    bool tracerOn = IsEnabled("Tracers");
+    bool chestOn  = IsEnabled("Chest ESP");
 
+    bool glOk  = !GLCapture::players.empty();
+    bool jniOk = false;
+
+    // Tenta JNI como fallback se GL n�o capturou nada
     SDK::CameraInfo cam{};
-    bool camOk = SDK::Minecraft::GetCameraInfo(cam) && cam.valid;
-    DrawDebugDot(sw, sh, camOk); // verde=JNI OK, vermelho=JNI falhou
-    if (!camOk) return;
+    std::vector<SDK::EntityInfo> jniPlayers;
+    if (!glOk && (espOn || tracerOn)) {
+        jniOk = SDK::Minecraft::GetCameraInfo(cam) && cam.valid;
+        if (jniOk) SDK::Minecraft::GetNearbyPlayers(jniPlayers);
+    }
 
-    std::vector<SDK::EntityInfo> players;
-    SDK::Minecraft::GetNearbyPlayers(players);
-    if (players.empty()) return;
+    DrawDebugDot(glOk, jniOk);
 
-    float aspect = (float)sw / (float)sh;
+    if (!espOn && !tracerOn && !chestOn) return;
 
     glPushAttrib(GL_ALL_ATTRIB_BITS);
     glDisable(GL_DEPTH_TEST);
@@ -173,60 +233,113 @@ void Render(int sw, int sh) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    for (auto& e : players) {
-        const float hw = 0.3f;  // meia-largura do hitbox
-        const float ht = 1.8f;  // altura do hitbox
+    // ── Jogadores via matrizes GL (m�todo principal) ──────────────────────────
+    if (glOk && (espOn || tracerOn)) {
+        for (size_t i = 0; i < GLCapture::players.size(); i++) {
+            if (i == 0) continue; // pula jogador local (primeiro a renderizar)
 
-        // 8 cantos do bounding box
-        const double xo[2] = {e.posX - hw, e.posX + hw};
-        const double zo[2] = {e.posZ - hw, e.posZ + hw};
-        const double yo[2] = {e.posY,      e.posY + ht};
+            auto& ent = GLCapture::players[i];
+            float minX, maxX, minY, maxY;
+            if (!CalcBBox(ent, PLAYER_CORNERS, 8, sw, sh, minX, maxX, minY, maxY))
+                continue;
 
-        float minX = 1e9f, maxX = -1e9f;
-        float minY = 1e9f, maxY = -1e9f;
-        bool  anyHit = false;
+            float bw = maxX - minX, bh = maxY - minY;
+            if (bw > (float)sw || bh > (float)sh || bw < 1.f || bh < 1.f)
+                continue;
 
-        for (int xi = 0; xi < 2; xi++)
-        for (int yi = 0; yi < 2; yi++)
-        for (int zi = 0; zi < 2; zi++) {
-            float sx, sy;
-            if (WorldToScreen(xo[xi], yo[yi], zo[zi],
-                              cam.eyeX, cam.eyeY, cam.eyeZ,
-                              cam.yaw, cam.pitch, cam.fov, aspect, sw, sh, sx, sy)) {
-                anyHit = true;
-                if (sx < minX) minX = sx;
-                if (sx > maxX) maxX = sx;
-                if (sy < minY) minY = sy;
-                if (sy > maxY) maxY = sy;
+            if (espOn) {
+                BoxOutline(minX, minY, bw, bh, 1.0f, 0.18f, 0.18f, 1.0f);
+                CornerBox (minX, minY, bw, bh, 1.0f, 0.25f, 0.25f, 0.92f);
+                HealthBar (minX, minY, bh);
+            }
+
+            if (tracerOn) {
+                // Tra�o do centro da tela inferior at� o centro do bot do hitbox
+                float fsx, fsy;
+                if (MatrixProject(ent.mv, ent.pr, 0.f, -1.f, 0.f, sw, sh, fsx, fsy)) {
+                    glColor4f(1.0f, 0.25f, 0.25f, 0.50f);
+                    glLineWidth(1.0f);
+                    glBegin(GL_LINES);
+                    glVertex2f((float)sw * 0.5f, (float)sh);
+                    glVertex2f(fsx, fsy);
+                    glEnd();
+                }
             }
         }
+    }
 
-        if (!anyHit) continue;
+    // ── Jogadores via JNI (fallback quando GL n�o capturou) ──────────────────
+    if (!glOk && jniOk && !jniPlayers.empty() && (espOn || tracerOn)) {
+        float aspect = (float)sw / (float)sh;
+        for (size_t idx = 1; idx < jniPlayers.size(); idx++) {
+            auto& e = jniPlayers[idx];
+            const float hw = 0.3f, ht = 1.8f;
+            const double xo[2] = {e.posX - hw, e.posX + hw};
+            const double zo[2] = {e.posZ - hw, e.posZ + hw};
+            const double yo[2] = {e.posY,      e.posY + ht};
 
-        float bw = maxX - minX;
-        float bh = maxY - minY;
-
-        // Clamp para não explodir fora da tela
-        if (bw > (float)sw || bh > (float)sh) continue;
-
-        if (espOn) {
-            CornerBox(minX, minY, bw, bh, 1.0f, 0.25f, 0.25f, 0.92f);
-            HealthBar(minX, minY, bh);
-        }
-
-        if (tracersOn) {
-            // Ponto dos pés (centro inferior do box)
-            float feetSX, feetSY;
-            if (WorldToScreen(e.posX, e.posY, e.posZ,
-                              cam.eyeX, cam.eyeY, cam.eyeZ,
-                              cam.yaw, cam.pitch, cam.fov, aspect, sw, sh, feetSX, feetSY)) {
-                glColor4f(1.0f, 0.25f, 0.25f, 0.50f);
-                glLineWidth(1.0f);
-                glBegin(GL_LINES);
-                glVertex2f((float)sw * 0.5f, (float)sh);
-                glVertex2f(feetSX, feetSY);
-                glEnd();
+            float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f;
+            bool any = false;
+            for (int xi = 0; xi < 2; xi++)
+            for (int yi = 0; yi < 2; yi++)
+            for (int zi = 0; zi < 2; zi++) {
+                float sx, sy;
+                if (WorldToScreen(xo[xi], yo[yi], zo[zi],
+                                  cam.eyeX, cam.eyeY, cam.eyeZ,
+                                  cam.yaw, cam.pitch, cam.fov, aspect,
+                                  sw, sh, sx, sy)) {
+                    any = true;
+                    if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
+                    if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
+                }
             }
+            if (!any) continue;
+            float bw = maxX - minX, bh = maxY - minY;
+            if (bw > (float)sw || bh > (float)sh || bw < 1.f || bh < 1.f) continue;
+
+            if (espOn) {
+                BoxOutline(minX, minY, bw, bh, 1.0f, 0.18f, 0.18f, 1.0f);
+                CornerBox (minX, minY, bw, bh, 1.0f, 0.25f, 0.25f, 0.92f);
+                HealthBar (minX, minY, bh);
+            }
+            if (tracerOn) {
+                float fsx, fsy;
+                if (WorldToScreen(e.posX, e.posY, e.posZ,
+                                  cam.eyeX, cam.eyeY, cam.eyeZ,
+                                  cam.yaw, cam.pitch, cam.fov, aspect,
+                                  sw, sh, fsx, fsy)) {
+                    glColor4f(1.0f, 0.25f, 0.25f, 0.50f);
+                    glLineWidth(1.0f);
+                    glBegin(GL_LINES);
+                    glVertex2f((float)sw * 0.5f, (float)sh);
+                    glVertex2f(fsx, fsy);
+                    glEnd();
+                }
+            }
+        }
+    }
+
+    // ── Chest ESP (s� via GL) ─────────────────────────────────────────────────
+    if (chestOn) {
+        // Ba�s simples — caixa dourada
+        for (auto& chest : GLCapture::chests) {
+            float minX, maxX, minY, maxY;
+            if (!CalcBBox(chest, CHEST_CORNERS, 8, sw, sh, minX, maxX, minY, maxY))
+                continue;
+            float bw = maxX - minX, bh = maxY - minY;
+            if (bw > (float)sw || bh > (float)sh || bw < 1.f || bh < 1.f) continue;
+            BoxOutline(minX, minY, bw, bh, 1.0f, 0.70f, 0.20f, 1.0f);
+            CornerBox (minX, minY, bw, bh, 1.0f, 0.70f, 0.20f, 0.85f);
+        }
+        // Ba�s duplos — caixa dourada mais larga
+        for (auto& lc : GLCapture::largeChests) {
+            float minX, maxX, minY, maxY;
+            if (!CalcBBox(lc, LARGE_CORNERS, 8, sw, sh, minX, maxX, minY, maxY))
+                continue;
+            float bw = maxX - minX, bh = maxY - minY;
+            if (bw > (float)sw || bh > (float)sh || bw < 1.f || bh < 1.f) continue;
+            BoxOutline(minX, minY, bw, bh, 1.0f, 0.70f, 0.20f, 1.0f);
+            CornerBox (minX, minY, bw, bh, 1.0f, 0.70f, 0.20f, 0.85f);
         }
     }
 

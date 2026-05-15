@@ -191,7 +191,7 @@ void Init() {
     tabs.clear();
     tabs.push_back({"Combat",   {{"KillAura",false},{"Reach",false},{"AutoBlock",false},{"Criticals",false},{"AimAssist",false}}});
     tabs.push_back({"Movement", {{"Speed",false},{"Fly",false},{"Sprint",false},{"NoFall",false},{"Bhop",false}}});
-    tabs.push_back({"Visual",   {{"ESP",false},{"Tracers",false},{"NameTags",false},{"Chams",false},{"Fullbright",false}}});
+    tabs.push_back({"Visual",   {{"ESP",true},{"Tracers",false},{"Chest ESP",false},{"NameTags",false},{"Chams",false},{"Fullbright",false}}});
     tabs.push_back({"Player",   {{"AntiKB",false},{"FastPlace",false},{"NoHunger",false},{"AutoEat",false}}});
 }
 
