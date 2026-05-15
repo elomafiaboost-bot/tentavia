@@ -59,7 +59,8 @@ struct JNINativeInterface_ {
     // 21
     jobject  (JNICALL *NewGlobalRef)(JNIEnv*, jobject);
 
-    void* _pad22;                   // 22 DeleteGlobalRef
+    // 22
+    void     (JNICALL *DeleteGlobalRef)(JNIEnv*, jobject);
 
     // 23
     void     (JNICALL *DeleteLocalRef)(JNIEnv*, jobject);
