@@ -54,7 +54,12 @@ struct JNINativeInterface_ {
     // 17
     void     (JNICALL *ExceptionClear)(JNIEnv*);
 
-    void* _pad18_22[5];             // 18-22 FatalError .. DeleteGlobalRef
+    void* _pad18_20[3];             // 18-20 FatalError, PushLocalFrame, PopLocalFrame
+
+    // 21
+    jobject  (JNICALL *NewGlobalRef)(JNIEnv*, jobject);
+
+    void* _pad22;                   // 22 DeleteGlobalRef
 
     // 23
     void     (JNICALL *DeleteLocalRef)(JNIEnv*, jobject);
@@ -104,7 +109,12 @@ struct JNINativeInterface_ {
     // 114 – variadic
     jobject  (JNICALL *CallStaticObjectMethod)(JNIEnv*, jclass, jmethodID, ...);
 
-    void* _pad115_168[54];          // 115-168
+    void* _pad115_166[52];          // 115-166
+
+    // 167
+    jstring     (JNICALL *NewStringUTF)(JNIEnv*, const char*);
+
+    void* _pad168;                  // 168 GetStringUTFLength
 
     // 169
     const char* (JNICALL *GetStringUTFChars)(JNIEnv*, jstring, jboolean*);
