@@ -3,6 +3,7 @@
 #include <iostream>
 #include <cstring>
 #include <vector>
+#include <cstdio>
 
 namespace SDK {
 
@@ -21,16 +22,16 @@ static jobject g_posYField  = nullptr;
 static jobject g_posZField  = nullptr;
 
 // ── Method ID cache ──────────────────────────────────────────────────────────
-static jmethodID s_gdfM      = nullptr; // Class.getDeclaredFields()
-static jmethodID s_getNameM  = nullptr; // Class.getName()
-static jmethodID s_getSuperM = nullptr; // Class.getSuperclass()
-static jmethodID s_getModsM  = nullptr; // Field.getModifiers()
-static jmethodID s_getTypeM  = nullptr; // Field.getType()
-static jmethodID s_getM      = nullptr; // Field.get(Object)
-static jmethodID s_setAccM   = nullptr; // Field.setAccessible(boolean)
-static jmethodID s_toStrM    = nullptr; // Object.toString()
-static jmethodID s_listSizeM = nullptr; // List.size()
-static jmethodID s_listGetM  = nullptr; // List.get(int)
+static jmethodID s_gdfM      = nullptr;
+static jmethodID s_getNameM  = nullptr;
+static jmethodID s_getSuperM = nullptr;
+static jmethodID s_getModsM  = nullptr;
+static jmethodID s_getTypeM  = nullptr;
+static jmethodID s_getM      = nullptr;
+static jmethodID s_setAccM   = nullptr;
+static jmethodID s_toStrM    = nullptr;
+static jmethodID s_listSizeM = nullptr;
+static jmethodID s_listGetM  = nullptr;
 
 static bool CacheReflectMethods(JNIEnv* env) {
     if (s_gdfM) return true;
@@ -56,7 +57,6 @@ static bool CacheReflectMethods(JNIEnv* env) {
     f->DeleteLocalRef(env, fieldCls);
     f->DeleteLocalRef(env, objCls);
     f->DeleteLocalRef(env, listCls);
-
     if (f->ExceptionCheck(env)) { f->ExceptionClear(env); s_gdfM = nullptr; return false; }
     return s_gdfM && s_getNameM && s_getSuperM && s_getModsM && s_getTypeM &&
            s_getM && s_setAccM  && s_listSizeM && s_listGetM;
@@ -82,7 +82,6 @@ static jobject GetDeclaredFields(JNIEnv* env, jobject classObj) {
     return arr;
 }
 
-// Returns local ref to superclass, or nullptr if none
 static jclass GetSuperclass(JNIEnv* env, jclass cls) {
     auto* f = env->functions;
     jclass sup = (jclass)f->CallObjectMethod(env, cls, s_getSuperM);
@@ -101,12 +100,11 @@ static std::string FieldTypeName(JNIEnv* env, jobject field) {
     auto* f = env->functions;
     jobject tc = f->CallObjectMethod(env, field, s_getTypeM);
     if (!tc || f->ExceptionCheck(env)) { f->ExceptionClear(env); return ""; }
-    std::string name = GetClassName(env, tc);
+    std::string n = GetClassName(env, tc);
     f->DeleteLocalRef(env, tc);
-    return name;
+    return n;
 }
 
-// setAccessible(true) then field.get(instance)
 static jobject FieldGet(JNIEnv* env, jobject field, jobject instance) {
     auto* f = env->functions;
     f->CallVoidMethod(env, field, s_setAccM, (jboolean)1);
@@ -136,22 +134,31 @@ static double FieldGetDouble(JNIEnv* env, jobject field, jobject instance) {
     return r;
 }
 
-static bool IsCoordRange(double v) { return v > -60000.0 && v < 60000.0 && v != 0.0; }
+// v > -60000 && v < 60000 (sem rejeitar 0.0 — spawn pode estar em x=0,z=0)
+static bool IsCoordRange(double v) { return v > -60000.0 && v < 60000.0; }
 
 static bool IsObjType(const std::string& t) {
     if (t.empty() || t[0] == '[') return false;
-    if (t == "int"    || t == "float"   || t == "double" || t == "boolean" ||
-        t == "long"   || t == "byte"    || t == "short"  || t == "char") return false;
+    if (t == "int"  || t == "float"   || t == "double"  || t == "boolean" ||
+        t == "long" || t == "byte"    || t == "short"   || t == "char") return false;
     if (t == "java.lang.String") return false;
     return true;
 }
 
-// ── Count coord doubles in an entity, walking superclass chain ────────────────
+// Duck-typing: try calling size() on any object. Returns -1 if not a List.
+static jint TryListSize(JNIEnv* env, jobject obj) {
+    auto* f = env->functions;
+    jint sz = f->CallIntMethod(env, obj, s_listSizeM);
+    if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return -1; }
+    return sz;
+}
+
+// ── Count coord doubles walking superclass chain ──────────────────────────────
 static int CountCoordDoubles(JNIEnv* env, jobject entity) {
     auto* f = env->functions;
     int count = 0;
     jclass cls = f->GetObjectClass(env, entity);
-    for (int depth = 0; cls && count < 3 && depth < 12; depth++) {
+    for (int d = 0; cls && count < 3 && d < 12; d++) {
         jobject flds = GetDeclaredFields(env, cls);
         if (flds) {
             jsize n = f->GetArrayLength(env, flds);
@@ -174,16 +181,14 @@ static int CountCoordDoubles(JNIEnv* env, jobject entity) {
     return count;
 }
 
-// ── Collect non-static Object field values from cls hierarchy ─────────────────
-// Returns vector of (typeName, localRef) — caller must DeleteLocalRef each value
+// ── Collect non-static Object field values walking superclass chain ────────────
 static std::vector<std::pair<std::string, jobject>>
 CollectObjFields(JNIEnv* env, jclass startCls, jobject instance) {
     auto* f = env->functions;
     static const jint ACC_STATIC = 0x0008;
     std::vector<std::pair<std::string, jobject>> result;
-
     jclass cls = (jclass)f->NewGlobalRef(env, startCls);
-    for (int depth = 0; cls && depth < 12; depth++) {
+    for (int d = 0; cls && d < 12; d++) {
         jobject flds = GetDeclaredFields(env, cls);
         if (flds) {
             jsize n = f->GetArrayLength(env, flds);
@@ -197,10 +202,7 @@ CollectObjFields(JNIEnv* env, jclass startCls, jobject instance) {
                         jobject val = FieldGet(env, field, instance);
                         if (val && !f->ExceptionCheck(env))
                             result.push_back({typeName, val});
-                        else {
-                            f->ExceptionClear(env);
-                            if (val) f->DeleteLocalRef(env, val);
-                        }
+                        else { f->ExceptionClear(env); if (val) f->DeleteLocalRef(env, val); }
                     }
                 }
                 f->DeleteLocalRef(env, field);
@@ -221,75 +223,149 @@ static void FreeObjFields(JNIEnv* env,
     v.clear();
 }
 
-// Check if obj is a non-empty List whose first element has coord doubles
-static bool IsEntityList(JNIEnv* env, jobject obj) {
+// ── Diagnostic dump (runs once) ───────────────────────────────────────────────
+static void DiagnoseStructure(JNIEnv* env, jobject mcInstance, jclass mcCls) {
+    static bool done = false;
+    if (done) return;
+    done = true;
+
     auto* f = env->functions;
-    jint sz = f->CallIntMethod(env, obj, s_listSizeM);
-    if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
-    if (sz <= 0) return false;
-    jobject elem = f->CallObjectMethod(env, obj, s_listGetM, (jint)0);
-    if (!elem || f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
-    int coords = CountCoordDoubles(env, elem);
-    f->DeleteLocalRef(env, elem);
-    return coords >= 2;
+    FILE* fp = fopen("tentavia_structure.txt", "w");
+    if (!fp) { std::cout << "[-] DIAG: nao conseguiu criar tentavia_structure.txt" << std::endl; return; }
+
+    fprintf(fp, "=== Estrutura do Singleton ===\n");
+
+    jclass cls = (jclass)f->NewGlobalRef(env, mcCls);
+    for (int d = 0; cls && d < 8; d++) {
+        std::string clsName = GetClassName(env, cls);
+        jobject flds = GetDeclaredFields(env, cls);
+        if (flds) {
+            jsize n = f->GetArrayLength(env, flds);
+            fprintf(fp, "\n[bfi superchain %d] %s (%d campos)\n", d, clsName.c_str(), (int)n);
+            for (jsize i = 0; i < n; i++) {
+                jobject field = f->GetObjectArrayElement(env, flds, i);
+                if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
+                jint mods = FieldGetMods(env, field);
+                bool isSt  = (mods & 0x0008) != 0;
+                std::string tname = FieldTypeName(env, field);
+                fprintf(fp, "  %s%s\n", isSt ? "static " : "", tname.c_str());
+
+                if (!isSt && IsObjType(tname)) {
+                    jobject val = FieldGet(env, field, mcInstance);
+                    if (val) {
+                        jclass vcls = f->GetObjectClass(env, val);
+                        std::string vname = GetClassName(env, vcls);
+                        fprintf(fp, "    → runtime: %s\n", vname.c_str());
+
+                        // Try as List
+                        jint listSz = TryListSize(env, val);
+                        if (listSz >= 0) {
+                            fprintf(fp, "    *** IS LIST, size=%d ***\n", (int)listSz);
+                        }
+
+                        // Walk sub-fields
+                        jclass sc = (jclass)f->NewGlobalRef(env, vcls);
+                        for (int sd = 0; sc && sd < 6; sd++) {
+                            std::string scName = GetClassName(env, sc);
+                            jobject sflds = GetDeclaredFields(env, sc);
+                            if (sflds) {
+                                jsize sn = f->GetArrayLength(env, sflds);
+                                if (sn > 0) fprintf(fp, "    [L1 super%d: %s]\n", sd, scName.c_str());
+                                for (jsize si = 0; si < sn; si++) {
+                                    jobject sf = f->GetObjectArrayElement(env, sflds, si);
+                                    if (!sf || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
+                                    jint smods = FieldGetMods(env, sf);
+                                    bool sst = (smods & 0x0008) != 0;
+                                    std::string stype = FieldTypeName(env, sf);
+                                    fprintf(fp, "      %s%s\n", sst ? "static " : "", stype.c_str());
+
+                                    // Try sub-field as List too
+                                    if (!sst && IsObjType(stype)) {
+                                        jobject sv = FieldGet(env, sf, val);
+                                        if (sv) {
+                                            jint ssz = TryListSize(env, sv);
+                                            if (ssz >= 0) fprintf(fp, "        *** IS LIST, size=%d ***\n", (int)ssz);
+                                            f->DeleteLocalRef(env, sv);
+                                        }
+                                    }
+                                    f->DeleteLocalRef(env, sf);
+                                }
+                                f->DeleteLocalRef(env, sflds);
+                            }
+                            jclass ssup = GetSuperclass(env, sc);
+                            f->DeleteLocalRef(env, sc);
+                            sc = ssup;
+                        }
+                        if (sc) f->DeleteLocalRef(env, sc);
+                        f->DeleteLocalRef(env, vcls);
+                        f->DeleteLocalRef(env, val);
+                    } else {
+                        fprintf(fp, "    → null\n");
+                    }
+                }
+                f->DeleteLocalRef(env, field);
+            }
+            f->DeleteLocalRef(env, flds);
+        }
+        jclass sup = GetSuperclass(env, cls);
+        f->DeleteLocalRef(env, cls);
+        cls = sup;
+    }
+    if (cls) f->DeleteLocalRef(env, cls);
+    fclose(fp);
+    std::cout << "[DIAG] Escreveu tentavia_structure.txt — compartilhe esse arquivo!" << std::endl;
 }
 
-// ── 3-level deep entity list search with superclass walking ───────────────────
+// ── 3-level entity list search (duck typing + best candidate) ─────────────────
 static jobject FindPlayerEntityList(JNIEnv* env, jobject mcInstance, jclass mcCls) {
     auto* f = env->functions;
 
-    auto level0 = CollectObjFields(env, mcCls, mcInstance);
+    DiagnoseStructure(env, mcInstance, mcCls);
 
-    for (auto& p0 : level0) {
-        const std::string& t0 = p0.first;
-        jobject v0 = p0.second;
+    jobject bestList    = nullptr;
+    jint    bestSize    = 0;
+    bool    bestIsCoord = false;
 
-        // Check v0 directly as a List
-        if (t0.find("List") != std::string::npos && IsEntityList(env, v0)) {
-            jint sz = f->CallIntMethod(env, v0, s_listSizeM);
-            if (f->ExceptionCheck(env)) f->ExceptionClear(env);
-            jobject ref = f->NewGlobalRef(env, v0);
-            FreeObjFields(env, level0);
-            std::cout << "[+] SDK: lista nivel 0 (" << sz << " entidades)" << std::endl;
-            return ref;
+    auto tryCandidate = [&](jobject obj) {
+        jint sz = TryListSize(env, obj);
+        if (sz <= 0) return;
+        // Check if first element has coord doubles (walking superclasses)
+        jobject elem = f->CallObjectMethod(env, obj, s_listGetM, (jint)0);
+        if (f->ExceptionCheck(env)) { f->ExceptionClear(env); return; }
+        bool hasCoords = false;
+        if (elem) {
+            hasCoords = (CountCoordDoubles(env, elem) >= 1);
+            f->DeleteLocalRef(env, elem);
         }
+        // Prefer coord-validated, then largest
+        if (!bestList || (!bestIsCoord && hasCoords) ||
+            (bestIsCoord == hasCoords && sz > bestSize)) {
+            if (bestList) f->DeleteLocalRef(env, bestList);
+            bestList    = f->NewGlobalRef(env, obj);
+            bestSize    = sz;
+            bestIsCoord = hasCoords;
+        }
+    };
 
-        jclass cls0 = f->GetObjectClass(env, v0);
-        auto level1 = CollectObjFields(env, cls0, v0);
+    auto level0 = CollectObjFields(env, mcCls, mcInstance);
+    for (auto& p0 : level0) {
+        jobject v0 = p0.second;
+        tryCandidate(v0);
+
+        jclass cls0   = f->GetObjectClass(env, v0);
+        auto   level1 = CollectObjFields(env, cls0, v0);
         f->DeleteLocalRef(env, cls0);
 
         for (auto& p1 : level1) {
-            const std::string& t1 = p1.first;
             jobject v1 = p1.second;
+            tryCandidate(v1);
 
-            if (t1.find("List") != std::string::npos && IsEntityList(env, v1)) {
-                jint sz = f->CallIntMethod(env, v1, s_listSizeM);
-                if (f->ExceptionCheck(env)) f->ExceptionClear(env);
-                jobject ref = f->NewGlobalRef(env, v1);
-                FreeObjFields(env, level1);
-                FreeObjFields(env, level0);
-                std::cout << "[+] SDK: lista nivel 1 (" << sz << " entidades)" << std::endl;
-                return ref;
-            }
-
-            jclass cls1 = f->GetObjectClass(env, v1);
-            auto level2 = CollectObjFields(env, cls1, v1);
+            jclass cls1   = f->GetObjectClass(env, v1);
+            auto   level2 = CollectObjFields(env, cls1, v1);
             f->DeleteLocalRef(env, cls1);
 
             for (auto& p2 : level2) {
-                const std::string& t2 = p2.first;
-                jobject v2 = p2.second;
-
-                if (t2.find("List") != std::string::npos && IsEntityList(env, v2)) {
-                    jint sz = f->CallIntMethod(env, v2, s_listSizeM);
-                    if (f->ExceptionCheck(env)) f->ExceptionClear(env);
-                    jobject ref = f->NewGlobalRef(env, v2);
-                    FreeObjFields(env, level2);
-                    FreeObjFields(env, level1);
-                    FreeObjFields(env, level0);
-                    std::cout << "[+] SDK: lista nivel 2 (" << sz << " entidades)" << std::endl;
-                    return ref;
-                }
+                tryCandidate(p2.second);
             }
             FreeObjFields(env, level2);
         }
@@ -297,8 +373,13 @@ static jobject FindPlayerEntityList(JNIEnv* env, jobject mcInstance, jclass mcCl
     }
     FreeObjFields(env, level0);
 
-    std::cout << "[-] SDK: lista de jogadores nao encontrada (3 niveis)." << std::endl;
-    return nullptr;
+    if (bestList) {
+        std::cout << "[+] SDK: lista encontrada (" << bestSize << " elem, coord="
+                  << (bestIsCoord ? "sim" : "nao") << ")" << std::endl;
+    } else {
+        std::cout << "[-] SDK: nenhuma List encontrada nos 3 niveis." << std::endl;
+    }
+    return bestList;
 }
 
 // ── Singleton discovery ───────────────────────────────────────────────────────
@@ -356,13 +437,10 @@ static jclass FindSingletonClass(JNIEnv* env, JVMTIEnv* jvmti) {
 static jobject GetSingletonInstance(JNIEnv* env, jclass cls, const std::string& className) {
     auto* f = env->functions;
     static const jint ACC_STATIC = 0x0008;
-
     jobject fieldsArr = GetDeclaredFields(env, cls);
     if (!fieldsArr) return nullptr;
-
     jsize   n      = f->GetArrayLength(env, fieldsArr);
     jobject result = nullptr;
-
     for (jsize i = 0; i < n && !result; i++) {
         jobject field = f->GetObjectArrayElement(env, fieldsArr, i);
         if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
@@ -419,16 +497,14 @@ static bool InitSDK(JNIEnv* env) {
     return true;
 }
 
-// ── Cache entity position fields, walking superclass chain ────────────────────
+// ── Cache entity position fields (walking superclass chain) ───────────────────
 static bool CacheEntityFields(JNIEnv* env, jobject entity) {
     if (g_posXField) return true;
     auto* f = env->functions;
-
     jobject cands[3] = {};
     int found = 0;
-
     jclass cls = f->GetObjectClass(env, entity);
-    for (int depth = 0; cls && found < 3 && depth < 12; depth++) {
+    for (int d = 0; cls && found < 3 && d < 12; d++) {
         jobject flds = GetDeclaredFields(env, cls);
         if (flds) {
             jsize n = f->GetArrayLength(env, flds);
@@ -448,7 +524,6 @@ static bool CacheEntityFields(JNIEnv* env, jobject entity) {
         cls = sup;
     }
     if (cls) f->DeleteLocalRef(env, cls);
-
     if (found < 3) {
         for (int i = 0; i < found; i++) f->DeleteLocalRef(env, cands[i]);
         return false;
@@ -481,9 +556,7 @@ bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
     for (jint i = 0; i < count; i++) {
         jobject entity = f->CallObjectMethod(env, g_entityList, s_listGetM, i);
         if (!entity || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
-
         if (!CacheEntityFields(env, entity)) { f->DeleteLocalRef(env, entity); continue; }
-
         EntityInfo info;
         info.posX = FieldGetDouble(env, g_posXField, entity);
         info.posY = FieldGetDouble(env, g_posYField, entity);
@@ -500,10 +573,8 @@ bool Minecraft::GetCameraInfo(CameraInfo& out) {
     if (g_initFailed) { g_initDone = false; g_initFailed = false; }
     if (!InitSDK(env)) return false;
     if (!g_entityList) return false;
-
     std::vector<EntityInfo> tmp;
     if (!GetNearbyPlayers(tmp) || tmp.empty()) return false;
-
     out.eyeX  = tmp[0].posX;
     out.eyeY  = tmp[0].posY + 1.62;
     out.eyeZ  = tmp[0].posZ;
