@@ -7,6 +7,7 @@ namespace SDK {
 struct EntityInfo {
     std::string name;
     double posX, posY, posZ;
+    float  yaw = 0.0f, pitch = 0.0f;
 };
 
 struct CameraInfo {

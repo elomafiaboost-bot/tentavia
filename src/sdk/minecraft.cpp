@@ -18,21 +18,24 @@ static bool    g_initDone        = false;
 static bool    g_initFailed      = false;
 static int     g_retryCount      = 0;
 
-static jobject g_posXField = nullptr;
-static jobject g_posYField = nullptr;
-static jobject g_posZField = nullptr;
+static jobject g_posXField  = nullptr;
+static jobject g_posYField  = nullptr;
+static jobject g_posZField  = nullptr;
+static jobject g_yawField   = nullptr; // rotationYaw (float) in Entity base class
+static jobject g_pitchField = nullptr; // rotationPitch (float) in Entity base class
 
 // ── Method cache ─────────────────────────────────────────────────────────────
-static jmethodID s_gdfM      = nullptr;
-static jmethodID s_getNameM  = nullptr;
-static jmethodID s_getSuperM = nullptr;
-static jmethodID s_getModsM  = nullptr;
-static jmethodID s_getTypeM  = nullptr;
-static jmethodID s_getM      = nullptr;
-static jmethodID s_setAccM   = nullptr;
-static jmethodID s_toStrM    = nullptr;
-static jmethodID s_listSizeM = nullptr;
-static jmethodID s_listGetM  = nullptr;
+static jmethodID s_gdfM         = nullptr;
+static jmethodID s_getNameM     = nullptr;
+static jmethodID s_getSuperM    = nullptr;
+static jmethodID s_getDeclClsM  = nullptr; // Field.getDeclaringClass()
+static jmethodID s_getModsM     = nullptr;
+static jmethodID s_getTypeM     = nullptr;
+static jmethodID s_getM         = nullptr;
+static jmethodID s_setAccM      = nullptr;
+static jmethodID s_toStrM       = nullptr;
+static jmethodID s_listSizeM    = nullptr;
+static jmethodID s_listGetM     = nullptr;
 
 static bool CacheReflectMethods(JNIEnv* env) {
     if (s_gdfM) return true;
@@ -42,20 +45,21 @@ static bool CacheReflectMethods(JNIEnv* env) {
     jclass objCls   = f->FindClass(env, "java/lang/Object");
     jclass listCls  = f->FindClass(env, "java/util/List");
     if (!classCls || !fieldCls || !objCls || !listCls) { f->ExceptionClear(env); return false; }
-    s_gdfM      = f->GetMethodID(env, classCls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;");
-    s_getNameM  = f->GetMethodID(env, classCls, "getName",           "()Ljava/lang/String;");
-    s_getSuperM = f->GetMethodID(env, classCls, "getSuperclass",     "()Ljava/lang/Class;");
-    s_getModsM  = f->GetMethodID(env, fieldCls, "getModifiers",      "()I");
-    s_getTypeM  = f->GetMethodID(env, fieldCls, "getType",           "()Ljava/lang/Class;");
-    s_getM      = f->GetMethodID(env, fieldCls, "get",               "(Ljava/lang/Object;)Ljava/lang/Object;");
-    s_setAccM   = f->GetMethodID(env, fieldCls, "setAccessible",     "(Z)V");
-    s_toStrM    = f->GetMethodID(env, objCls,   "toString",          "()Ljava/lang/String;");
-    s_listSizeM = f->GetMethodID(env, listCls,  "size",              "()I");
-    s_listGetM  = f->GetMethodID(env, listCls,  "get",               "(I)Ljava/lang/Object;");
+    s_gdfM        = f->GetMethodID(env, classCls, "getDeclaredFields", "()[Ljava/lang/reflect/Field;");
+    s_getNameM    = f->GetMethodID(env, classCls, "getName",           "()Ljava/lang/String;");
+    s_getSuperM   = f->GetMethodID(env, classCls, "getSuperclass",     "()Ljava/lang/Class;");
+    s_getDeclClsM = f->GetMethodID(env, fieldCls, "getDeclaringClass", "()Ljava/lang/Class;");
+    s_getModsM    = f->GetMethodID(env, fieldCls, "getModifiers",      "()I");
+    s_getTypeM    = f->GetMethodID(env, fieldCls, "getType",           "()Ljava/lang/Class;");
+    s_getM        = f->GetMethodID(env, fieldCls, "get",               "(Ljava/lang/Object;)Ljava/lang/Object;");
+    s_setAccM     = f->GetMethodID(env, fieldCls, "setAccessible",     "(Z)V");
+    s_toStrM      = f->GetMethodID(env, objCls,   "toString",          "()Ljava/lang/String;");
+    s_listSizeM   = f->GetMethodID(env, listCls,  "size",              "()I");
+    s_listGetM    = f->GetMethodID(env, listCls,  "get",               "(I)Ljava/lang/Object;");
     f->DeleteLocalRef(env, classCls); f->DeleteLocalRef(env, fieldCls);
     f->DeleteLocalRef(env, objCls);   f->DeleteLocalRef(env, listCls);
     if (f->ExceptionCheck(env)) { f->ExceptionClear(env); s_gdfM = nullptr; return false; }
-    return s_gdfM && s_getNameM && s_getSuperM && s_getModsM && s_getTypeM &&
+    return s_gdfM && s_getNameM && s_getSuperM && s_getDeclClsM && s_getModsM && s_getTypeM &&
            s_getM && s_setAccM  && s_listSizeM && s_listGetM;
 }
 
@@ -581,6 +585,48 @@ static bool CacheEntityFields(JNIEnv* env, jobject entity) {
     return true;
 }
 
+// ── Cache rotationYaw/rotationPitch from the same class that declares posX ────
+// posX is in Entity base class; rotationYaw/rotationPitch are the first 2 floats
+// declared in that same class.
+static bool CacheRotationFields(JNIEnv* env) {
+    if (g_yawField || !g_posXField) return g_yawField != nullptr;
+    auto* f = env->functions;
+
+    // Get the class that declared posX (the Entity base class)
+    jclass entityCls = (jclass)f->CallObjectMethod(env, g_posXField, s_getDeclClsM);
+    if (!entityCls || f->ExceptionCheck(env)) { f->ExceptionClear(env); return false; }
+
+    jobject flds = GetDeclaredFields(env, entityCls);
+    f->DeleteLocalRef(env, entityCls);
+    if (!flds) return false;
+
+    static const jint ACC_STATIC = 0x0008;
+    jsize   n    = f->GetArrayLength(env, flds);
+    jobject c[2] = {};
+    int     found = 0;
+
+    for (jsize i = 0; i < n && found < 2; i++) {
+        jobject field = f->GetObjectArrayElement(env, flds, i);
+        if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
+        jint mods = FieldGetMods(env, field);
+        if (!(mods & ACC_STATIC) && FieldTypeName(env, field) == "float")
+            c[found++] = field;
+        else
+            f->DeleteLocalRef(env, field);
+    }
+    f->DeleteLocalRef(env, flds);
+
+    if (found < 2) {
+        for (int i = 0; i < found; i++) f->DeleteLocalRef(env, c[i]);
+        return false;
+    }
+    g_yawField   = f->NewGlobalRef(env, c[0]);
+    g_pitchField = f->NewGlobalRef(env, c[1]);
+    for (int i = 0; i < 2; i++) f->DeleteLocalRef(env, c[i]);
+    std::cout << "[+] SDK: campos yaw/pitch cacheados." << std::endl;
+    return true;
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
     JNIEnv* env = Env();
@@ -602,10 +648,13 @@ bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
             jobject entity = f->GetObjectArrayElement(env, g_entityList, i);
             if (!entity || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
             if (!CacheEntityFields(env, entity)) { f->DeleteLocalRef(env, entity); continue; }
+            CacheRotationFields(env);
             EntityInfo info;
-            info.posX = FieldGetDouble(env, g_posXField, entity);
-            info.posY = FieldGetDouble(env, g_posYField, entity);
-            info.posZ = FieldGetDouble(env, g_posZField, entity);
+            info.posX  = FieldGetDouble(env, g_posXField, entity);
+            info.posY  = FieldGetDouble(env, g_posYField, entity);
+            info.posZ  = FieldGetDouble(env, g_posZField, entity);
+            if (g_yawField)   info.yaw   = (float)FieldGetDouble(env, g_yawField,   entity);
+            if (g_pitchField) info.pitch = (float)FieldGetDouble(env, g_pitchField, entity);
             out.push_back(info);
             f->DeleteLocalRef(env, entity);
         }
@@ -616,10 +665,13 @@ bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
             jobject entity = f->CallObjectMethod(env, g_entityList, s_listGetM, i);
             if (!entity || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
             if (!CacheEntityFields(env, entity)) { f->DeleteLocalRef(env, entity); continue; }
+            CacheRotationFields(env);
             EntityInfo info;
-            info.posX = FieldGetDouble(env, g_posXField, entity);
-            info.posY = FieldGetDouble(env, g_posYField, entity);
-            info.posZ = FieldGetDouble(env, g_posZField, entity);
+            info.posX  = FieldGetDouble(env, g_posXField, entity);
+            info.posY  = FieldGetDouble(env, g_posYField, entity);
+            info.posZ  = FieldGetDouble(env, g_posZField, entity);
+            if (g_yawField)   info.yaw   = (float)FieldGetDouble(env, g_yawField,   entity);
+            if (g_pitchField) info.pitch = (float)FieldGetDouble(env, g_pitchField, entity);
             out.push_back(info);
             f->DeleteLocalRef(env, entity);
         }
@@ -638,8 +690,8 @@ bool Minecraft::GetCameraInfo(CameraInfo& out) {
     out.eyeX  = tmp[0].posX;
     out.eyeY  = tmp[0].posY + 1.62;
     out.eyeZ  = tmp[0].posZ;
-    out.yaw   = 0.0f;
-    out.pitch = 0.0f;
+    out.yaw   = tmp[0].yaw;
+    out.pitch = tmp[0].pitch;
     out.fov   = 70.0f;
     out.valid = true;
     return true;
