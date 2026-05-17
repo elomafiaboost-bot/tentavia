@@ -96,6 +96,12 @@ float GetValue(const char* name) {
     return 0.0f;
 }
 
+void GetColor(const char* name, float& r, float& g, float& b) {
+    for (auto& tab : tabs)
+        for (auto& ft : tab.features)
+            if (ft.name == name && ft.hasColor) { r = ft.r; g = ft.g; b = ft.b; return; }
+}
+
 void DrawText2D(int sw, int sh, float px, float py,
                 float r, float g, float b,
                 const char* txt, bool centerX)
@@ -252,6 +258,20 @@ static void UpdateInput(HDC hdc) {
                         fts[i].value = fts[i].vMin + t * (fts[i].vMax - fts[i].vMin);
                     }
                 }
+            } else if (fts[i].hasColor) {
+                // Color bars fixas: R[142,180] G[182,220] B[222,260]
+                if (lbtn) {
+                    float localX = g_mx - x;
+                    auto dragBar = [&](float bx, float& comp) {
+                        if (localX >= bx && localX <= bx + 38.f) {
+                            float t = (localX - bx) / 38.f;
+                            comp = t < 0.f ? 0.f : t > 1.f ? 1.f : t;
+                        }
+                    };
+                    dragBar(142.f, fts[i].r);
+                    dragBar(182.f, fts[i].g);
+                    dragBar(222.f, fts[i].b);
+                }
             } else {
                 if (g_clicked) fts[i].enabled = !fts[i].enabled;
             }
@@ -270,7 +290,12 @@ void Init() {
         {"Aim Height", false, true,  0.5f,  0.0f,   1.0f},
     }});
     tabs.push_back({"Movement", {{"Speed",false},{"Fly",false},{"Sprint",false},{"NoFall",false},{"Bhop",false}}});
-    tabs.push_back({"Visual",   {{"ESP",true},{"Tracers",false},{"Chest ESP",false},{"NameTags",false},{"XRay",false},{"Fullbright",false}}});
+    tabs.push_back({"Visual",   {
+        {"ESP",true},{"Tracers",false},{"Chest ESP",false},{"NameTags",false},{"XRay",false},{"Fullbright",false},
+        // Color pickers — hasColor=true, default: jogador=vermelho, bau=dourado
+        {"Player Color", false, false, 0.f, 0.f, 0.f, true, 1.0f, 0.18f, 0.18f},
+        {"Chest Color",  false, false, 0.f, 0.f, 0.f, true, 1.0f, 0.70f, 0.20f},
+    }});
     tabs.push_back({"Player",   {{"AntiKB",false},{"FastPlace",false},{"NoHunger",false},{"AutoEat",false}}});
 }
 
@@ -368,7 +393,40 @@ void Render(HDC hdc, int sw, int sh) {
             float dotX = mx + PAD + 6.f, dotY = iy + ITM_H * 0.5f;
             const char* fname = fts[i].name.c_str();
 
-            if (fts[i].hasValue) {
+            if (fts[i].hasColor) {
+                // ── Color picker ──────────────────────────────────────────
+                // Dot colorido (mostra a cor atual)
+                FilledDot(dotX, dotY, 4.f, Col4{fts[i].r, fts[i].g, fts[i].b, 1.0f});
+
+                if (hov) Set(C_DIM); else Set(C_DIMLO);
+                DrawStr(mx + PAD + 18.f, iy + 9.f, fname);
+
+                float barY = iy + (ITM_H - 5.f) * 0.5f;
+
+                // R / G / B bars em posições fixas a partir da esquerda do menu
+                struct { float bx; float val; float tr, tg, tb; } bars[3] = {
+                    {mx + 142.f, fts[i].r, 0.85f, 0.10f, 0.10f},
+                    {mx + 182.f, fts[i].g, 0.10f, 0.80f, 0.10f},
+                    {mx + 222.f, fts[i].b, 0.10f, 0.10f, 0.85f},
+                };
+                for (auto& bar : bars) {
+                    glColor4f(0.07f, 0.09f, 0.18f, 0.85f);
+                    FillR(bar.bx, barY, 38.f, 5.f);
+                    glColor4f(bar.tr, bar.tg, bar.tb, 0.80f);
+                    FillR(bar.bx, barY, 38.f * bar.val, 5.f);
+                    Set(C_BORD);
+                    LineR(bar.bx, barY, 38.f, 5.f);
+                }
+
+                // Swatch: retângulo com a cor resultante
+                float swX = mx + MW - 26.f;
+                float swY = iy + (ITM_H - 12.f) * 0.5f;
+                glColor4f(fts[i].r, fts[i].g, fts[i].b, 1.0f);
+                FillR(swX, swY, 20.f, 12.f);
+                glColor4f(fts[i].r * 0.55f, fts[i].g * 0.55f, fts[i].b * 0.55f, 1.0f);
+                LineR(swX, swY, 20.f, 12.f);
+
+            } else if (fts[i].hasValue) {
                 // ── Slider ────────────────────────────────────────────────
                 FilledDot(dotX, dotY, 3.f, C_DIMLO, 0.5f);
 

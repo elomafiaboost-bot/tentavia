@@ -15,6 +15,9 @@ struct Feature {
     float       value    = 0.0f;
     float       vMin     = 0.0f;
     float       vMax     = 1.0f;
+    // Campos de color picker — ignorados quando hasColor == false
+    bool        hasColor = false;
+    float       r = 1.0f, g = 1.0f, b = 1.0f;
 };
 
 struct Tab {
@@ -49,5 +52,8 @@ bool FontReady();
 
 // Retorna o valor float de uma feature slider (0.0 se não encontrada).
 float GetValue(const char* name);
+
+// Preenche r/g/b com a cor da feature color picker. Não altera os valores se não encontrada.
+void GetColor(const char* name, float& r, float& g, float& b);
 
 } // namespace Menu

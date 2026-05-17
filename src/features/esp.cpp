@@ -225,6 +225,12 @@ void Render(int sw, int sh) {
 
     if (!espOn && !tracerOn && !chestOn && !nameTagOn) return;
 
+    // Cores dinâmicas do menu (fallback para os defaults se ainda não inicializado)
+    float pr = 1.0f, pg = 0.18f, pb = 0.18f;
+    float cr = 1.0f, cg = 0.70f, cb = 0.20f;
+    Menu::GetColor("Player Color", pr, pg, pb);
+    Menu::GetColor("Chest Color",  cr, cg, cb);
+
     glPushAttrib(GL_ALL_ATTRIB_BITS);
     glDisable(GL_DEPTH_TEST);
     glDisable(GL_TEXTURE_2D);
@@ -249,8 +255,8 @@ void Render(int sw, int sh) {
                 continue;
 
             if (espOn) {
-                BoxOutline(minX, minY, bw, bh, 1.0f, 0.18f, 0.18f, 1.0f);
-                CornerBox (minX, minY, bw, bh, 1.0f, 0.25f, 0.25f, 0.92f);
+                BoxOutline(minX, minY, bw, bh, pr, pg, pb, 1.0f);
+                CornerBox (minX, minY, bw, bh, pr, pg, pb, 0.92f);
                 HealthBar (minX, minY, bh);
             }
 
@@ -258,7 +264,7 @@ void Render(int sw, int sh) {
                 // Tra�o do centro da tela inferior at� o centro do bot do hitbox
                 float fsx, fsy;
                 if (MatrixProject(ent.mv, ent.pr, 0.f, -1.f, 0.f, sw, sh, fsx, fsy)) {
-                    glColor4f(1.0f, 0.25f, 0.25f, 0.50f);
+                    glColor4f(pr, pg, pb, 0.50f);
                     glLineWidth(1.0f);
                     glBegin(GL_LINES);
                     glVertex2f((float)sw * 0.5f, (float)sh);
@@ -310,8 +316,8 @@ void Render(int sw, int sh) {
             if (bw > (float)sw || bh > (float)sh || bw < 1.f || bh < 1.f) continue;
 
             if (espOn) {
-                BoxOutline(minX, minY, bw, bh, 1.0f, 0.18f, 0.18f, 1.0f);
-                CornerBox (minX, minY, bw, bh, 1.0f, 0.25f, 0.25f, 0.92f);
+                BoxOutline(minX, minY, bw, bh, pr, pg, pb, 1.0f);
+                CornerBox (minX, minY, bw, bh, pr, pg, pb, 0.92f);
                 HealthBar (minX, minY, bh);
             }
             if (tracerOn) {
@@ -320,7 +326,7 @@ void Render(int sw, int sh) {
                                   cam.eyeX, cam.eyeY, cam.eyeZ,
                                   cam.yaw, cam.pitch, cam.fov, aspect,
                                   sw, sh, fsx, fsy)) {
-                    glColor4f(1.0f, 0.25f, 0.25f, 0.50f);
+                    glColor4f(pr, pg, pb, 0.50f);
                     glLineWidth(1.0f);
                     glBegin(GL_LINES);
                     glVertex2f((float)sw * 0.5f, (float)sh);
@@ -340,8 +346,8 @@ void Render(int sw, int sh) {
                 continue;
             float bw = maxX - minX, bh = maxY - minY;
             if (bw > (float)sw || bh > (float)sh || bw < 1.f || bh < 1.f) continue;
-            BoxOutline(minX, minY, bw, bh, 1.0f, 0.70f, 0.20f, 1.0f);
-            CornerBox (minX, minY, bw, bh, 1.0f, 0.70f, 0.20f, 0.85f);
+            BoxOutline(minX, minY, bw, bh, cr, cg, cb, 1.0f);
+            CornerBox (minX, minY, bw, bh, cr, cg, cb, 0.85f);
         }
         // Ba�s duplos — caixa dourada mais larga
         for (auto& lc : GLCapture::largeChests) {
@@ -350,8 +356,8 @@ void Render(int sw, int sh) {
                 continue;
             float bw = maxX - minX, bh = maxY - minY;
             if (bw > (float)sw || bh > (float)sh || bw < 1.f || bh < 1.f) continue;
-            BoxOutline(minX, minY, bw, bh, 1.0f, 0.70f, 0.20f, 1.0f);
-            CornerBox (minX, minY, bw, bh, 1.0f, 0.70f, 0.20f, 0.85f);
+            BoxOutline(minX, minY, bw, bh, cr, cg, cb, 1.0f);
+            CornerBox (minX, minY, bw, bh, cr, cg, cb, 0.85f);
         }
     }
 
