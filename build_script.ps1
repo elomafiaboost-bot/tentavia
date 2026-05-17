@@ -29,6 +29,7 @@ $compileCmd = "`"$clExe`" " +
     "src/sdk/minecraft.cpp " +
     "src/features/esp.cpp " +
     "src/features/aimbot.cpp " +
+    "src/features/speedbridge.cpp " +
     "/LD /Ox /EHsc /std:c++17 " +
     "/I src " +
     "/I `"$detourInc`" " +

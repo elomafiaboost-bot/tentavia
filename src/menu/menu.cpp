@@ -178,13 +178,14 @@ static float g_dragOX, g_dragOY;
 // Keybinds: mapeamento VK → nome da feature (edge-triggered, sem hold repeat)
 struct KeyBind { int vk; const char* feature; bool prev; };
 static KeyBind g_keybinds[] = {
-    { VK_F1, "ESP",        false },
-    { VK_F2, "Tracers",    false },
-    { VK_F3, "Chest ESP",  false },
-    { VK_F4, "Aimbot",     false },
-    { VK_F5, "XRay",       false },
-    { VK_F6, "NameTags",   false },
-    { VK_F7, "Fullbright", false },
+    { VK_F1, "ESP",          false },
+    { VK_F2, "Tracers",      false },
+    { VK_F3, "Chest ESP",    false },
+    { VK_F4, "Aimbot",       false },
+    { VK_F5, "XRay",         false },
+    { VK_F6, "NameTags",     false },
+    { VK_F7, "Fullbright",   false },
+    { VK_F8, "Speed Bridge", false },
 };
 
 static void UpdateKeybinds() {
@@ -289,7 +290,7 @@ void Init() {
         {"Aim Speed",  false, true,  0.6f,  0.1f,   2.0f},
         {"Aim Height", false, true,  0.5f,  0.0f,   1.0f},
     }});
-    tabs.push_back({"Movement", {{"Speed",false},{"Fly",false},{"Sprint",false},{"NoFall",false},{"Bhop",false}}});
+    tabs.push_back({"Movement", {{"Speed",false},{"Fly",false},{"Sprint",false},{"NoFall",false},{"Bhop",false},{"Speed Bridge",false}}});
     tabs.push_back({"Visual",   {
         {"ESP",true},{"Tracers",false},{"Chest ESP",false},{"NameTags",false},{"XRay",false},{"Fullbright",false},
         // Color pickers — hasColor=true, default: jogador=vermelho, bau=dourado
@@ -488,7 +489,7 @@ void Render(HDC hdc, int sw, int sh) {
     // ── Rodapé ────────────────────────────────────────────────────────────
     float footY = my + mh - FOT_H;
     Set(C_FOOT); FillR(mx, footY, MW, FOT_H);
-    Set(C_DIMLO); DrawStr(mx + PAD, footY + 2.f, "INSERT  F1-F7: toggles");
+    Set(C_DIMLO); DrawStr(mx + PAD, footY + 2.f, "INSERT  F1-F8: toggles");
     Set(C_DIMLO); DrawStr(mx + MW - TW("v0.1") - PAD, footY + 2.f, "v0.1");
 
     // ── Borda externa ─────────────────────────────────────────────────────

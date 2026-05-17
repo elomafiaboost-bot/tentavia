@@ -2,6 +2,7 @@
 #include "../menu/menu.hpp"
 #include "../features/esp.hpp"
 #include "../features/aimbot.hpp"
+#include "../features/speedbridge.hpp"
 #include "../sdk/gl_capture.hpp"
 #include "../sdk/minecraft.hpp"
 #include <iostream>
@@ -150,6 +151,7 @@ namespace Renderer {
 
         ESP::Render(sw, sh);
         Aimbot::Update(sw, sh);
+        SpeedBridge::Update();
 
         // AntiKB: zera motionX/Z do jogador local via JNI a cada frame
         {
