@@ -1,0 +1,24 @@
+/*
+ * Decompiled with CFR 0.152.
+ */
+package cc.unknown.command.commands;
+
+import cc.unknown.Haru;
+import cc.unknown.command.Command;
+import cc.unknown.command.Flips;
+
+@Flips(name="Help", alias="ayuda", desc="Show the all commands", syntax=".help")
+public class HelpCommand
+extends Command {
+    @Override
+    public void onExecute(String[] args) {
+        if (args.length != 1) {
+            StringBuilder message = new StringBuilder();
+            for (Command c : Haru.instance.getCommandManager().getCommand()) {
+                message.append(this.getColor("Green")).append(" - ").append(this.getColor("White")).append(this.getColor("Blue")).append(c.syntax).append(this.getColor("Gray") + " [").append(c.desc + "]").append("\n");
+            }
+            this.sendChat(message.toString(), new Object[0]);
+        }
+    }
+}
+
