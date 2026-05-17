@@ -3,8 +3,39 @@
 #include <thread>
 #include <iostream>
 
-#include "sdk/jni_stub.hpp"
-#include "sdk/jni_utils.hpp"
+// Real JNI/JVMTI headers from JDK (included via /I flag in build script)
+#include <jni.h>
+#include <jvmti.h>
+
+// Compatibility alias used throughout this file
+typedef jvmtiEnv JVMTIEnv;
+
+// ── JVM utility helpers ───────────────────────────────────────────────────────
+static JavaVM* GetJavaVM() {
+    HMODULE hJvm = GetModuleHandleA("jvm.dll");
+    if (!hJvm) return nullptr;
+    typedef jint(JNICALL* tGetVMs)(JavaVM**, jsize, jsize*);
+    auto fn = (tGetVMs)GetProcAddress(hJvm, "JNI_GetCreatedJavaVMs");
+    if (!fn) return nullptr;
+    JavaVM* vm = nullptr; jsize n = 0;
+    if (fn(&vm, 1, &n) != JNI_OK || n == 0) return nullptr;
+    return vm;
+}
+static JNIEnv* GetJNIEnv() {
+    JavaVM* vm = GetJavaVM();
+    if (!vm) return nullptr;
+    JNIEnv* env = nullptr;
+    if (vm->GetEnv((void**)&env, JNI_VERSION_1_8) == JNI_EDETACHED)
+        vm->AttachCurrentThread((void**)&env, nullptr);
+    return env;
+}
+static JVMTIEnv* GetJVMTIEnv() {
+    JavaVM* vm = GetJavaVM();
+    if (!vm) return nullptr;
+    JVMTIEnv* jvmti = nullptr;
+    vm->GetEnv((void**)&jvmti, JVMTI_VERSION_1_2);
+    return jvmti;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Loads tentavia.jar into the Forge FMLLaunchClassLoader and invokes
@@ -124,13 +155,13 @@ static DWORD WINAPI MainThread(LPVOID lpModule) {
     JVMTIEnv* jvmti = nullptr;
 
     for (int i = 0; i < 120 && !jvm; i++) {
-        jvm = JNIUtils::GetJavaVM();
+        jvm = GetJavaVM();
         if (!jvm) Sleep(500);
     }
     if (!jvm) { FreeLibraryAndExitThread((HMODULE)lpModule, 1); return 1; }
 
-    env   = JNIUtils::GetJNIEnv();
-    jvmti = JNIUtils::GetJVMTIEnv();
+    env   = GetJNIEnv();
+    jvmti = GetJVMTIEnv();
     if (!env || !jvmti) { FreeLibraryAndExitThread((HMODULE)lpModule, 1); return 1; }
 
     // Wait for Minecraft class to be loaded

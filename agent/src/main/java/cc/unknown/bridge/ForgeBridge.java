@@ -12,11 +12,12 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.WorldClient;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
 import net.minecraftforge.client.event.RenderWorldLastEvent;
-import net.minecraftforge.event.entity.living.LivingUpdateEvent;
+import net.minecraftforge.event.entity.living.LivingEvent.LivingUpdateEvent;
 import net.minecraftforge.event.world.WorldEvent.Load;
 import net.minecraftforge.fml.common.eventhandler.EventPriority;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
 import net.minecraftforge.fml.common.gameevent.InputEvent;
+import org.lwjgl.input.Mouse;
 import net.minecraftforge.fml.common.gameevent.TickEvent.ClientTickEvent;
 import net.minecraftforge.fml.common.gameevent.TickEvent.Phase;
 import net.minecraftforge.fml.common.gameevent.TickEvent.PlayerTickEvent;
@@ -99,7 +100,7 @@ public class ForgeBridge {
 
     @SubscribeEvent(priority = EventPriority.HIGHEST)
     public void onLivingUpdate(LivingUpdateEvent e) {
-        if (e.entity == mc.field_71439_g) {
+        if ((Object) e.entity == mc.field_71439_g) {
             Haru.instance.getEventBus().post(new LivingEvent());
         }
     }
@@ -122,15 +123,15 @@ public class ForgeBridge {
 
     @SubscribeEvent
     public void onMouseInput(InputEvent.MouseInputEvent e) {
-        Haru.instance.getEventBus().post(new MouseEvent());
+        Haru.instance.getEventBus().post(new MouseEvent(Mouse.getEventButton()));
     }
 
     // ── World ─────────────────────────────────────────────────────────────────
 
     @SubscribeEvent
     public void onWorldLoad(Load e) {
-        if (e.world instanceof WorldClient) {
-            Haru.instance.getEventBus().post(new WorldEvent((WorldClient) e.world));
+        if ((Object) e.world instanceof WorldClient) {
+            Haru.instance.getEventBus().post(new WorldEvent((WorldClient)(Object) e.world));
         }
     }
 }

@@ -40,6 +40,21 @@
             <version>2.9.4-nightly-20150209</version>
             <scope>provided</scope>
         </dependency>
+        <!-- Guava is bundled with Forge 1.8.9 at runtime -->
+        <dependency>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+            <version>17.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Haru JAR contains all Minecraft/Forge compiled classes needed for compilation -->
+        <dependency>
+            <groupId>cc.unknown</groupId>
+            <artifactId>haru-forge-189</artifactId>
+            <version>1.0</version>
+            <scope>system</scope>
+            <systemPath>C:\Users\mknal\Downloads\Haru-Client-Forge-1.8.9.jar</systemPath>
+        </dependency>
     </dependencies>
 
     <build>

@@ -15,10 +15,14 @@ if (-not (Test-Path "build")) { New-Item -ItemType Directory -Path "build" }
 $clExe = "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Tools\MSVC\14.51.36223\bin\Hostx64\x64\cl.exe"
 
 # The DLL is now a thin JAR loader - no Detours, no OpenGL, no ImGui needed
+$jdkInclude = "C:\Users\mknal\Downloads\jdk21\jdk-21.0.4+7\include"
+
 $compileCmd = "`"$clExe`" " +
     "src/main.cpp " +
     "/LD /Ox /EHsc /std:c++17 " +
     "/I src " +
+    "/I `"$jdkInclude`" " +
+    "/I `"$jdkInclude\win32`" " +
     "/Febuild/tentavia.dll /Fobuild/ " +
     "user32.lib kernel32.lib"
 
