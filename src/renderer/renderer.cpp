@@ -96,9 +96,7 @@ namespace Renderer {
     static void InstallGLCaptureHooks(); // forward declaration
 
     BOOL WINAPI hkwglSwapBuffers(HDC hdc) {
-        static int  s_frames   = 0;
-        static bool s_glReady  = false;
-        s_frames++;
+        static bool s_glReady = false;
 
         // Instala hooks GL no thread de renderização (mais seguro com Detours)
         if (!s_glReady) {
@@ -107,21 +105,11 @@ namespace Renderer {
         }
 
         HGLRC ctx = wglGetCurrentContext();
-        if (!ctx) {
-            if (s_frames <= 5 || s_frames % 300 == 0)
-                std::cout << "[-] hkwglSwapBuffers: sem contexto GL (frame " << s_frames << ")" << std::endl;
-            return owglSwapBuffers(hdc);
-        }
+        if (!ctx) return owglSwapBuffers(hdc);
 
         GLint vp[4] = {};
         glGetIntegerv(GL_VIEWPORT, vp);
         int sw = vp[2], sh = vp[3];
-
-        if (s_frames <= 5 || s_frames % 300 == 0)
-            std::cout << "[D] hook frame=" << s_frames
-                      << " ctx=" << (void*)ctx
-                      << " vp=" << sw << "x" << sh
-                      << " entities=" << GLCapture::players.size() << std::endl;
 
         if (sw <= 0 || sh <= 0) return owglSwapBuffers(hdc);
 

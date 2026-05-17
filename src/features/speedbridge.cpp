@@ -3,7 +3,6 @@
 #include "../sdk/minecraft.hpp"
 #include <windows.h>
 #include <chrono>
-#include <iostream>
 
 namespace SpeedBridge {
 
@@ -76,7 +75,7 @@ void Update() {
             SetShift(true);
             g_shiftHeld  = true;
             g_lastToggle = now;
-            std::cout << "[SB] sneak ON" << std::endl;
+
         }
     }
 }

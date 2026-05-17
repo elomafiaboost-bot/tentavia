@@ -698,8 +698,8 @@ bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
     if (g_initFailed) { g_initDone = false; g_initFailed = false; }
     if (!InitSDK(env)) {
         g_retryCount++;
-        if (g_retryCount <= 3 || (g_retryCount % 120) == 0)
-            std::cout << "[-] SDK: init falhou (tentativa " << g_retryCount << ")" << std::endl;
+        if (g_retryCount == 1)
+            std::cout << "[-] SDK: init falhou. Aguardando..." << std::endl;
         return false;
     }
 
