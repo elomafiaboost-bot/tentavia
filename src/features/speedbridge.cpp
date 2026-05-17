@@ -3,19 +3,12 @@
 #include "../sdk/minecraft.hpp"
 #include <windows.h>
 #include <chrono>
-
-// Speed Bridge: pulsa sneak (Shift) enquanto o feature estiver ativo e in-game.
-//
-// Método primário: escreve diretamente no keyDownBuffer do LWJGL via JNI.
-// LWJGL 2 usa Raw Input com RIDEV_NOLEGACY, o que suprime WM_KEYDOWN e faz
-// SendInput ser ignorado pelo Minecraft. A escrita direta no buffer bypassa isso.
-//
-// Fallback: SendInput (funciona se LWJGL não usar Raw Input, ex: versões antigas).
+#include <iostream>
 
 namespace SpeedBridge {
 
-static const int SNEAK_HOLD_MS    = 50;   // ms com Shift pressionado
-static const int SNEAK_RELEASE_MS = 150;  // ms com Shift solto (ciclo total ~200ms)
+static const int SNEAK_HOLD_MS    = 50;
+static const int SNEAK_RELEASE_MS = 150;
 
 static bool g_shiftHeld = false;
 static std::chrono::steady_clock::time_point g_lastToggle;
@@ -28,15 +21,25 @@ static bool IsEnabled() {
     return false;
 }
 
+// Verifica se a janela do nosso processo está em foco.
+// Mais confiável que GetCursorInfo para detectar "in-game" no Minecraft.
+static bool OurWindowFocused() {
+    HWND fg = GetForegroundWindow();
+    if (!fg) return false;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    return pid == GetCurrentProcessId();
+}
+
 static void SetShift(bool pressed) {
-    // Tenta JNI direto no keyDownBuffer do LWJGL (método confiável)
+    // Tenta JNI direto no keyDownBuffer do LWJGL (bypassa Raw Input)
     if (SDK::Minecraft::SetSneakKeyState(pressed)) return;
 
-    // Fallback: SendInput com scan code explícito
+    // Fallback: SendInput com scan code
     INPUT inp = {};
     inp.type       = INPUT_KEYBOARD;
     inp.ki.wVk     = VK_LSHIFT;
-    inp.ki.wScan   = 0x2A; // DIK_LSHIFT
+    inp.ki.wScan   = 0x2A;
     inp.ki.dwFlags = pressed ? KEYEVENTF_SCANCODE
                              : (KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP);
     SendInput(1, &inp, sizeof(INPUT));
@@ -53,13 +56,7 @@ void Update() {
         return;
     }
 
-    // Só pulsa quando in-game (cursor oculto = inventário/chat fechados)
-    CURSORINFO ci = {};
-    ci.cbSize = sizeof(ci);
-    GetCursorInfo(&ci);
-    bool inGame = !(ci.flags & CURSOR_SHOWING);
-
-    if (!inGame) {
+    if (!OurWindowFocused()) {
         if (g_shiftHeld) { SetShift(false); g_shiftHeld = false; }
         g_lastToggle = std::chrono::steady_clock::now();
         return;
@@ -79,6 +76,7 @@ void Update() {
             SetShift(true);
             g_shiftHeld  = true;
             g_lastToggle = now;
+            std::cout << "[SB] sneak ON" << std::endl;
         }
     }
 }
