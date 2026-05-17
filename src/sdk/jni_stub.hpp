@@ -153,6 +153,15 @@ struct JNINativeInterface_ {
 
     // 228
     jboolean (JNICALL *ExceptionCheck)(JNIEnv*);
+
+    // 229
+    jobject  (JNICALL *NewDirectByteBuffer)(JNIEnv*, void*, jlong);
+
+    // 230
+    void*    (JNICALL *GetDirectBufferAddress)(JNIEnv*, jobject);
+
+    // 231
+    jlong    (JNICALL *GetDirectBufferCapacity)(JNIEnv*, jobject);
 };
 
 // ─── JNIEnv_ ──────────────────────────────────────────────────────────────

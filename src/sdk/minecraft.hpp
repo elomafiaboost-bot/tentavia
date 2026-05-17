@@ -23,6 +23,9 @@ public:
     static bool GetCameraInfo(CameraInfo& out);
     // Zera motionX/Z do jogador local para cancelar knockback horizontal.
     static bool ApplyAntiKB();
+    // Escreve diretamente no keyDownBuffer do LWJGL (KEY_LSHIFT=42).
+    // Mais confiável que SendInput pois bypassa o Raw Input do LWJGL 2.
+    static bool SetSneakKeyState(bool pressed);
 };
 
 namespace Classes {

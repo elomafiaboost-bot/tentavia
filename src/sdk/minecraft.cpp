@@ -763,6 +763,71 @@ bool Minecraft::GetCameraInfo(CameraInfo& out) {
 
 void Minecraft::PrintLocalPlayerName() {}
 
+bool Minecraft::SetSneakKeyState(bool pressed) {
+    JNIEnv* env = Env();
+    if (!env) return false;
+    if (!CacheReflectMethods(env)) return false;
+
+    // Cache o ponteiro nativo do keyDownBuffer do LWJGL na primeira chamada.
+    // org.lwjgl.input.Keyboard tem um campo static ByteBuffer (keyDownBuffer)
+    // indexado pelo keycode LWJGL (KEY_LSHIFT = 42 = DIK_LSHIFT).
+    static void* s_keyBuf = nullptr;
+    static bool  s_tried  = false;
+
+    if (!s_tried) {
+        s_tried = true;
+        auto* f = env->functions;
+
+        jclass kbCls = f->FindClass(env, "org/lwjgl/input/Keyboard");
+        if (!kbCls || f->ExceptionCheck(env)) {
+            f->ExceptionClear(env);
+            std::cout << "[-] SDK: org/lwjgl/input/Keyboard nao encontrado." << std::endl;
+            return false;
+        }
+
+        static const jint ACC_STATIC = 0x0008;
+        jobject flds = GetDeclaredFields(env, kbCls);
+        if (flds) {
+            jsize n = f->GetArrayLength(env, flds);
+            for (jsize i = 0; i < n && !s_keyBuf; i++) {
+                jobject field = f->GetObjectArrayElement(env, flds, i);
+                if (!field || f->ExceptionCheck(env)) { f->ExceptionClear(env); continue; }
+                jint mods = FieldGetMods(env, field);
+                if (mods & ACC_STATIC) {
+                    std::string t = FieldTypeName(env, field);
+                    if (t == "java.nio.ByteBuffer") {
+                        f->CallVoidMethod(env, field, s_setAccM, (jboolean)1);
+                        if (f->ExceptionCheck(env)) f->ExceptionClear(env);
+                        jobject buf = f->CallObjectMethod(env, field, s_getM, (jobject)nullptr);
+                        if (buf && !f->ExceptionCheck(env)) {
+                            void* addr = f->GetDirectBufferAddress(env, buf);
+                            if (addr) {
+                                s_keyBuf = addr;
+                                std::cout << "[+] SDK: LWJGL keyDownBuffer @ " << addr << std::endl;
+                            }
+                            f->DeleteLocalRef(env, buf);
+                        } else f->ExceptionClear(env);
+                    }
+                }
+                f->DeleteLocalRef(env, field);
+            }
+            f->DeleteLocalRef(env, flds);
+        }
+        f->DeleteLocalRef(env, kbCls);
+
+        if (!s_keyBuf)
+            std::cout << "[-] SDK: keyDownBuffer nao encontrado no Keyboard." << std::endl;
+    }
+
+    if (!s_keyBuf) return false;
+
+    // KEY_LSHIFT no LWJGL 2 = 42 (DIK_LSHIFT = 0x2A)
+    static const int KEY_LSHIFT = 42;
+    ((uint8_t*)s_keyBuf)[KEY_LSHIFT] = pressed ? 1 : 0;
+    return true;
+}
+
+
 bool Minecraft::ApplyAntiKB() {
     JNIEnv* env = Env();
     if (!env || !g_initDone || !g_entityList) return false;
