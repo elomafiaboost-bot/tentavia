@@ -16,7 +16,6 @@ static jobject g_entityList      = nullptr;
 static bool    g_entityListIsArr = false; // true = [Lxxx; array, false = java.util.List
 static bool    g_initDone        = false;
 static bool    g_initFailed      = false;
-static int     g_retryCount      = 0;
 
 static jobject g_posXField  = nullptr;
 static jobject g_posYField  = nullptr;
@@ -502,6 +501,21 @@ static void DiagnoseStructure(JNIEnv* env, jobject mcInst, jclass mcCls,
     fclose(fp);
 }
 
+static bool InitSDK(JNIEnv* env); // forward declaration
+
+// ── Helper de retry com cooldown ─────────────────────────────────────────────
+// Centraliza o reset de g_initFailed para evitar retries a cada frame.
+static bool TryInit(JNIEnv* env) {
+    if (g_initFailed) {
+        static int s_cd = 0;
+        if (++s_cd < 600) return false; // aguarda ~10s antes de tentar de novo
+        s_cd         = 0;
+        g_initDone   = false;
+        g_initFailed = false;
+    }
+    return InitSDK(env);
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 static bool InitSDK(JNIEnv* env) {
     if (g_initDone) return !g_initFailed;
@@ -691,15 +705,7 @@ static bool CacheRotationFields(JNIEnv* env) {
 bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
     JNIEnv* env = Env();
     if (!env) return false;
-    // Retry com cooldown: só tenta reiniciar o SDK a cada 600 frames (~10s a 60fps)
-    if (g_initFailed) {
-        g_retryCount++;
-        if (g_retryCount < 600) return false;
-        g_retryCount = 0;
-        g_initDone   = false;
-        g_initFailed = false;
-    }
-    if (!InitSDK(env)) return false;
+    if (!TryInit(env)) return false;
 
     auto* f = env->functions;
 
@@ -744,8 +750,7 @@ bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
 bool Minecraft::GetCameraInfo(CameraInfo& out) {
     JNIEnv* env = Env();
     if (!env) return false;
-    if (g_initFailed) { g_initDone = false; g_initFailed = false; }
-    if (!InitSDK(env)) return false;
+    if (!TryInit(env)) return false;
     if (!g_entityList) return false;
     std::vector<EntityInfo> tmp;
     if (!GetNearbyPlayers(tmp) || tmp.empty()) return false;
