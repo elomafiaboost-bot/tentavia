@@ -359,7 +359,6 @@ static std::vector<jclass> FindAllSingletonCandidates(JNIEnv* env, JVMTIEnv* jvm
         }
 
         if (found) {
-            std::cout << "[+] SDK: candidato: " << clsName << std::endl;
             results.push_back((jclass)f->NewGlobalRef(env, classes[k]));
         }
         f->DeleteLocalRef(env, classes[k]);
@@ -501,7 +500,6 @@ static void DiagnoseStructure(JNIEnv* env, jobject mcInst, jclass mcCls,
     }
     if (cls) f->DeleteLocalRef(env, cls);
     fclose(fp);
-    std::cout << "[DIAG] tentavia_structure.txt atualizado." << std::endl;
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -530,7 +528,6 @@ static bool InitSDK(JNIEnv* env) {
         std::string candName = GetClassName(env, cand);
         jobject inst = GetSingletonInstance(env, cand, candName);
         if (!inst) {
-            std::cout << "[-] SDK: " << candName << " instancia nula, pulando." << std::endl;
             env->functions->DeleteGlobalRef(env, cand);
             continue;
         }
@@ -554,7 +551,6 @@ static bool InitSDK(JNIEnv* env) {
             }
             return true;
         }
-        std::cout << "[-] SDK: " << candName << " sem lista de entidades." << std::endl;
         env->functions->DeleteLocalRef(env, inst);
         env->functions->DeleteGlobalRef(env, cand);
     }
@@ -695,13 +691,15 @@ static bool CacheRotationFields(JNIEnv* env) {
 bool Minecraft::GetNearbyPlayers(std::vector<EntityInfo>& out) {
     JNIEnv* env = Env();
     if (!env) return false;
-    if (g_initFailed) { g_initDone = false; g_initFailed = false; }
-    if (!InitSDK(env)) {
+    // Retry com cooldown: só tenta reiniciar o SDK a cada 600 frames (~10s a 60fps)
+    if (g_initFailed) {
         g_retryCount++;
-        if (g_retryCount == 1)
-            std::cout << "[-] SDK: init falhou. Aguardando..." << std::endl;
-        return false;
+        if (g_retryCount < 600) return false;
+        g_retryCount = 0;
+        g_initDone   = false;
+        g_initFailed = false;
     }
+    if (!InitSDK(env)) return false;
 
     auto* f = env->functions;
 
