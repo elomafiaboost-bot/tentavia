@@ -32,6 +32,8 @@ implements IImageBuffer {
         return this.func_78432_a(image);
     }
 
+    public void skinAvailable() {}
+
     public void func_152634_a() {
         AbstractClientPlayer player = (AbstractClientPlayer)this.playerRef.get();
         if (player != null) {

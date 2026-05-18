@@ -92,16 +92,16 @@ extends Module {
                         e.setPacket((Packet<?>)wrapper);
                     }
                 } else if (p instanceof S27PacketExplosion) {
-                    wrapper = (S27PacketExplosion)p;
+                    S27PacketExplosion s27 = (S27PacketExplosion)p;
                     if (this.horizontal.getInput() != 0.0 && this.vertical.getInput() != 0.0) {
-                        wrapper.field_149152_f = 0.0f;
-                        wrapper.field_149153_g = 0.0f;
-                        wrapper.field_149159_h = 0.0f;
+                        s27.field_149152_f = 0.0f;
+                        s27.field_149153_g = 0.0f;
+                        s27.field_149159_h = 0.0f;
                         return;
                     }
-                    wrapper.field_149152_f = (float)((double)wrapper.field_149152_f * this.horizontal.getInput());
-                    wrapper.field_149153_g = (float)((double)wrapper.field_149153_g * this.vertical.getInput());
-                    wrapper.field_149159_h = (float)((double)wrapper.field_149159_h * this.horizontal.getInput());
+                    s27.field_149152_f = (float)((double)s27.field_149152_f * this.horizontal.getInput());
+                    s27.field_149153_g = (float)((double)s27.field_149153_g * this.vertical.getInput());
+                    s27.field_149159_h = (float)((double)s27.field_149159_h * this.horizontal.getInput());
                 }
             }
             if (this.mode.is("Ground Grim") && PlayerUtil.isMoving() && Velocity.mc.field_71439_g.field_70122_E) {

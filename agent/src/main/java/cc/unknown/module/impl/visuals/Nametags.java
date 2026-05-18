@@ -84,7 +84,7 @@ extends Module {
             e.setCancelled(true);
         }
         if (e.is3D()) {
-            ArrayList players = new ArrayList();
+            ArrayList<net.minecraft.entity.player.EntityPlayer> players = new ArrayList<net.minecraft.entity.player.EntityPlayer>();
             Nametags.mc.field_71441_e.field_73010_i.forEach(entity -> {
                 double distance = Nametags.mc.field_71439_g.func_70032_d((Entity)entity);
                 if (this.range.getInput() != 0.0 && distance > this.range.getInput() || entity.func_70005_c_().matches(".*[-/|<>\\u0e22\\u0e07].*") || entity.func_70005_c_().isEmpty() || !this.showInvis.isToggled() && entity.func_82150_aj()) {

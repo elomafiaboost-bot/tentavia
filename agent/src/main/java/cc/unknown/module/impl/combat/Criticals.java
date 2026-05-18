@@ -29,7 +29,6 @@ import java.util.ArrayList;
 import java.util.List;
 import net.minecraft.entity.Entity;
 import net.minecraft.network.Packet;
-import net.minecraft.network.play.INetHandlerPlayServer;
 import net.minecraft.network.play.client.C02PacketUseEntity;
 import net.minecraft.network.play.client.C0APacketAnimation;
 import net.minecraft.network.play.server.S08PacketPlayerPosLook;
@@ -43,8 +42,8 @@ extends Module {
     private SliderValue criticalHitChance = new SliderValue("Critical Hit Chance (%)", 100.0, 0.0, 100.0, 1.0);
     private boolean onAir;
     private boolean hitGround;
-    private List<Packet<INetHandlerPlayServer>> packets = new ArrayList<Packet<INetHandlerPlayServer>>();
-    private List<Packet<INetHandlerPlayServer>> attackPackets = new ArrayList<Packet<INetHandlerPlayServer>>();
+    private List<Packet<?>> packets = new ArrayList<Packet<?>>();
+    private List<Packet<?>> attackPackets = new ArrayList<Packet<?>>();
     private Cold timer = new Cold();
 
     public Criticals() {

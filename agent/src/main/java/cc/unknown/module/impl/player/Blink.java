@@ -93,8 +93,8 @@ extends Module {
                 this.packets.add(p);
             }
             if (p instanceof C03PacketPlayer && ((C03PacketPlayer)p).func_149466_j()) {
-                wrapper = (C03PacketPlayer)p;
-                Vec3 packetPos = new Vec3(wrapper.field_149479_a, wrapper.field_149477_b, wrapper.field_149478_c);
+                C03PacketPlayer c03 = (C03PacketPlayer)p;
+                Vec3 packetPos = new Vec3(c03.field_149479_a, c03.field_149477_b, c03.field_149478_c);
                 List<Vec3> list2 = this.positions;
                 synchronized (list2) {
                     this.positions.add(packetPos);

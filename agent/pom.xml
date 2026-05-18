@@ -15,65 +15,91 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
-    <repositories>
-        <repository>
-            <id>mojang</id>
-            <url>https://libraries.minecraft.net/</url>
-        </repository>
-        <repository>
-            <id>forge</id>
-            <url>https://maven.minecraftforge.net/</url>
-        </repository>
-    </repositories>
-
     <dependencies>
-        <!-- Forge 1.8.9 stubs for compilation - provided at runtime by Minecraft -->
+        <!-- Vanilla Minecraft 1.8.9 — compile-time only, provided at runtime -->
         <dependency>
-            <groupId>com.google.code.gson</groupId>
-            <artifactId>gson</artifactId>
-            <version>2.2.4</version>
-            <scope>provided</scope>
+            <groupId>com.mojang</groupId>
+            <artifactId>minecraft</artifactId>
+            <version>1.8.9</version>
+            <scope>system</scope>
+            <systemPath>C:/Users/mknal/AppData/Roaming/.minecraft/versions/1.8.9/1.8.9.jar</systemPath>
         </dependency>
+        <!-- LWJGL provided by Minecraft at runtime -->
         <dependency>
             <groupId>org.lwjgl.lwjgl</groupId>
             <artifactId>lwjgl</artifactId>
             <version>2.9.4-nightly-20150209</version>
             <scope>provided</scope>
         </dependency>
-        <!-- Guava is bundled with Forge 1.8.9 at runtime -->
+        <!-- Gson provided by Minecraft at runtime -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+            <version>2.2.4</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Guava provided by Minecraft at runtime -->
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
             <version>17.0</version>
             <scope>provided</scope>
         </dependency>
-        <!-- Haru JAR contains all Minecraft/Forge compiled classes needed for compilation -->
+        <!-- ASM 5.2 — bundled into tentavia.jar (used for bytecode transformation) -->
         <dependency>
-            <groupId>cc.unknown</groupId>
-            <artifactId>haru-forge-189</artifactId>
-            <version>1.0</version>
-            <scope>system</scope>
-            <systemPath>C:\Users\mknal\Downloads\Haru-Client-Forge-1.8.9.jar</systemPath>
+            <groupId>org.ow2.asm</groupId>
+            <artifactId>asm</artifactId>
+            <version>5.2</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.ow2.asm</groupId>
+            <artifactId>asm-commons</artifactId>
+            <version>5.2</version>
+            <scope>compile</scope>
         </dependency>
     </dependencies>
 
     <build>
         <sourceDirectory>src/main/java</sourceDirectory>
         <plugins>
+            <!-- Shade plugin creates a fat jar with ASM bundled -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-jar-plugin</artifactId>
-                <version>3.3.0</version>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals><goal>shade</goal></goals>
+                        <configuration>
+                            <outputFile>${project.basedir}/../build/tentavia.jar</outputFile>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <artifactSet>
+                                <includes>
+                                    <include>org.ow2.asm:asm</include>
+                                    <include>org.ow2.asm:asm-commons</include>
+                                </includes>
+                            </artifactSet>
+                            <archive>
+                                <manifestEntries>
+                                    <Agent-Class>cc.unknown.TentaviaAgent</Agent-Class>
+                                    <Premain-Class>cc.unknown.TentaviaAgent</Premain-Class>
+                                    <Can-Redefine-Classes>true</Can-Redefine-Classes>
+                                    <Can-Retransform-Classes>true</Can-Retransform-Classes>
+                                </manifestEntries>
+                            </archive>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
                 <configuration>
-                    <archive>
-                        <manifestEntries>
-                            <Agent-Class>cc.unknown.TentaviaAgent</Agent-Class>
-                            <Can-Redefine-Classes>true</Can-Redefine-Classes>
-                            <Can-Retransform-Classes>true</Can-Retransform-Classes>
-                        </manifestEntries>
-                    </archive>
-                    <finalName>tentavia</finalName>
-                    <outputDirectory>${project.basedir}/../build</outputDirectory>
+                    <source>1.8</source>
+                    <target>1.8</target>
                 </configuration>
             </plugin>
         </plugins>

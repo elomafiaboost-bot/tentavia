@@ -26,7 +26,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicReference;
 import net.minecraft.client.gui.GuiScreen;
-import net.minecraftforge.fml.relauncher.ReflectionHelper;
+import java.lang.reflect.Method;
 import org.lwjgl.input.Keyboard;
 import org.lwjgl.input.Mouse;
 
@@ -153,7 +153,12 @@ extends Module {
         int y = gui.field_146295_m - Mouse.getY() * gui.field_146295_m / AutoClick.mc.field_71440_d - 1;
         try {
             if ((double)this.invClick >= this.invDelay.getInput()) {
-                ReflectionHelper.findMethod(GuiScreen.class, null, (String[])new String[]{"func_73864_a", "mouseClicked"}, (Class[])new Class[]{Integer.TYPE, Integer.TYPE, Integer.TYPE}).invoke((Object)gui, x, y, 0);
+                Method m = null;
+                for (String name : new String[]{"func_73864_a", "mouseClicked"}) {
+                    try { m = GuiScreen.class.getDeclaredMethod(name, int.class, int.class, int.class); break; }
+                    catch (NoSuchMethodException ignored) {}
+                }
+                if (m != null) { m.setAccessible(true); m.invoke(gui, x, y, 0); }
                 this.invClick = 0;
             }
         }

@@ -145,7 +145,7 @@ extends Module {
         Vec3 playerLook = renderView.func_70676_i(1.0f);
         Vec3 reachTarget = eyePosition.func_72441_c(playerLook.field_72450_a * reach, playerLook.field_72448_b * reach, playerLook.field_72449_c * reach);
         Vec3 targetHitVec = null;
-        List targetsWithinReach = Reach.mc.field_71441_e.func_72839_b(renderView, renderView.func_174813_aQ().func_72321_a(playerLook.field_72450_a * reach, playerLook.field_72448_b * reach, playerLook.field_72449_c * reach).func_72314_b(1.0, 1.0, 1.0));
+        List<Entity> targetsWithinReach = Reach.mc.field_71441_e.func_72839_b(renderView, renderView.func_174813_aQ().func_72321_a(playerLook.field_72450_a * reach, playerLook.field_72448_b * reach, playerLook.field_72449_c * reach).func_72314_b(1.0, 1.0, 1.0));
         double adjustedReach = reach;
         for (Entity entity : targetsWithinReach) {
             double distanceToVec;

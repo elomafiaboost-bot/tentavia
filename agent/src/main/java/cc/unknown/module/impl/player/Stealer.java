@@ -120,7 +120,8 @@ extends Module {
             }
             return null;
         }).filter(Objects::nonNull).collect(Collectors.toCollection(ArrayList::new));
-        Slot[] sorted = this.sort(slots.toArray(new Slot[0]));
+        @SuppressWarnings("unchecked")
+        Slot[] sorted = this.sort((Slot[])slots.toArray(new Slot[0]));
         this.sortedSlots.set(new ArrayList<Slot>(Arrays.asList(sorted)));
     }
 

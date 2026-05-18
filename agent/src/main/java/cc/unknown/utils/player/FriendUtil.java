@@ -47,7 +47,7 @@ public enum FriendUtil implements Loona
     public boolean removeFriend(String name) {
         boolean removed = false;
         boolean found = false;
-        for (NetworkPlayerInfo networkPlayerInfo : new ArrayList(mc.func_147114_u().func_175106_d())) {
+        for (NetworkPlayerInfo networkPlayerInfo : new ArrayList<NetworkPlayerInfo>(mc.func_147114_u().func_175106_d())) {
             String playerName;
             EntityPlayer entity;
             if (networkPlayerInfo.func_178854_k() == null || (entity = FriendUtil.mc.field_71441_e.func_72924_a(playerName = networkPlayerInfo.func_178854_k().func_150260_c())) == null || !entity.func_70005_c_().equalsIgnoreCase(name) && !entity.func_95999_t().equalsIgnoreCase(name)) continue;

@@ -1,8 +1,6 @@
 package cc.unknown;
 
-import cc.unknown.bridge.ForgeBridge;
-import net.minecraft.client.Minecraft;
-import net.minecraftforge.common.MinecraftForge;
+import cc.unknown.transform.VanillaCoreTransformer;
 
 import java.lang.instrument.Instrumentation;
 
@@ -10,52 +8,59 @@ public class TentaviaAgent {
 
     private static Instrumentation instrumentation;
 
-    /**
-     * Called when the agent is attached via -javaagent or JVMTI loadAgent.
-     */
     public static void agentmain(String args, Instrumentation inst) {
         instrumentation = inst;
-        init();
+        init(inst);
     }
 
     public static void premain(String args, Instrumentation inst) {
         instrumentation = inst;
-        init();
+        init(inst);
     }
 
-    /**
-     * Called from the C++ DLL after loading this JAR into the game classloader.
-     * Starts the client in a separate thread to avoid blocking the injector.
-     */
-    public static void init() {
-        Thread t = new Thread(TentaviaAgent::startWhenReady, "Tentavia-Init");
+    public static void init(Instrumentation inst) {
+        VanillaCoreTransformer transformer = new VanillaCoreTransformer();
+        inst.addTransformer(transformer, true);
+
+        Thread t = new Thread(() -> startWhenReady(inst, transformer), "Tentavia-Init");
         t.setDaemon(true);
         t.start();
     }
 
-    private static void startWhenReady() {
-        // Wait for Minecraft to fully initialize
+    private static void startWhenReady(Instrumentation inst, VanillaCoreTransformer transformer) {
+        // Wait for Minecraft to be loaded in the classloader
+        Class<?> mcClass = null;
+        while (mcClass == null) {
+            try {
+                mcClass = Class.forName("net.minecraft.client.Minecraft");
+            } catch (ClassNotFoundException ignored) {}
+            try { Thread.sleep(200); } catch (InterruptedException e) { return; }
+        }
+
+        // Retransform key classes so our hooks are injected
+        try {
+            inst.retransformClasses(transformer.getTargetClasses(mcClass.getClassLoader()));
+        } catch (Throwable e) {
+            System.err.println("[Tentavia] Retransform falhou: " + e.getMessage());
+        }
+
+        // Wait for the player to be in-game before starting modules
         while (true) {
             try {
-                Minecraft mc = Minecraft.func_71410_x();
-                if (mc != null && mc.field_71439_g != null) {
-                    break;
+                Object mc = mcClass.getMethod("func_71410_x").invoke(null);
+                if (mc != null) {
+                    Object player = mc.getClass().getField("field_71439_g").get(mc);
+                    if (player != null) break;
                 }
             } catch (Throwable ignored) {}
             try { Thread.sleep(200); } catch (InterruptedException e) { return; }
         }
 
         try {
-            // Register Forge event bridge (translates Forge events -> Haru events)
-            ForgeBridge bridge = new ForgeBridge();
-            MinecraftForge.EVENT_BUS.register(bridge);
-
-            // Start the Haru client
             Haru.instance.startClient();
-
-            System.out.println("[Tentavia] Cliente iniciado com sucesso.");
+            System.out.println("[Tentavia] Cliente iniciado.");
         } catch (Throwable e) {
-            System.err.println("[Tentavia] Erro ao iniciar cliente:");
+            System.err.println("[Tentavia] Erro ao iniciar:");
             e.printStackTrace();
         }
     }
