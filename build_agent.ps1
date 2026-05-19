@@ -1,5 +1,7 @@
 # Build tentavia.jar sem Maven — usa javac + jar direto
-$ErrorActionPreference = "Stop"
+# Use "Continue" so javac/jar warnings on stderr don't abort the script;
+# failures are caught via $LASTEXITCODE checks after each tool call.
+$ErrorActionPreference = "Continue"
 $root = $PSScriptRoot
 $agentSrc = "$root\agent\src\main\java"
 $buildDir = "$root\build"
@@ -63,7 +65,7 @@ Write-Host "[*] Compilando $($sources.Count) arquivos..."
 $listFile = "$tmpDir\sources.txt"
 [System.IO.File]::WriteAllLines($listFile, $sources, [System.Text.Encoding]::ASCII)
 
-& $javac -source 8 -target 8 -encoding UTF-8 -cp $cp -d "$tmpDir\classes" "@$listFile"
+& $javac -source 8 -target 8 -Xlint:-options -encoding UTF-8 -cp $cp -d "$tmpDir\classes" "@$listFile"
 if ($LASTEXITCODE -ne 0) { Write-Error "Compilacao falhou"; exit 1 }
 Write-Host "[+] Compilacao OK"
 
