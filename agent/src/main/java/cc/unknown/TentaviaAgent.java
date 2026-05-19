@@ -27,29 +27,42 @@ public class TentaviaAgent {
         t.start();
     }
 
+    // SRG (deobf/Forge) vs OBF (vanilla 1.8.9) lookup tables.
+    // Method/field names differ; we try SRG first, fall back to OBF.
+    private static final String[] MC_CLASS_NAMES   = { "net.minecraft.client.Minecraft", "bib" };
+    private static final String[] MC_GETTER_NAMES  = { "func_71410_x", "A" };
+    private static final String[] PLAYER_FIELD_NAMES = { "field_71439_g", "h" };
+
     private static void startWhenReady(Instrumentation inst, VanillaCoreTransformer transformer) {
-        // Wait for Minecraft to be loaded in the classloader
+        // Wait for Minecraft class to appear in any classloader (SRG or OBF).
         Class<?> mcClass = null;
         while (mcClass == null) {
-            try {
-                mcClass = Class.forName("net.minecraft.client.Minecraft");
-            } catch (ClassNotFoundException ignored) {}
+            for (String name : MC_CLASS_NAMES) {
+                try { mcClass = Class.forName(name); break; } catch (ClassNotFoundException ignored) {}
+            }
             try { Thread.sleep(200); } catch (InterruptedException e) { return; }
         }
 
-        // Retransform key classes so our hooks are injected
+        // Retransform key classes so our hooks are injected (agentmain path; premain catches loads).
         try {
             inst.retransformClasses(transformer.getTargetClasses(mcClass.getClassLoader()));
         } catch (Throwable e) {
             System.err.println("[Tentavia] Retransform falhou: " + e.getMessage());
         }
 
-        // Wait for the player to be in-game before starting modules
+        // Wait for the player to be in-game before starting modules.
+        // Try each known getter/field name so both SRG and OBF runtimes work.
         while (true) {
             try {
-                Object mc = mcClass.getMethod("func_71410_x").invoke(null);
+                Object mc = null;
+                for (String getter : MC_GETTER_NAMES) {
+                    try { mc = mcClass.getMethod(getter).invoke(null); break; } catch (Throwable ignored) {}
+                }
                 if (mc != null) {
-                    Object player = mc.getClass().getField("field_71439_g").get(mc);
+                    Object player = null;
+                    for (String field : PLAYER_FIELD_NAMES) {
+                        try { player = mc.getClass().getField(field).get(mc); break; } catch (Throwable ignored) {}
+                    }
                     if (player != null) break;
                 }
             } catch (Throwable ignored) {}
