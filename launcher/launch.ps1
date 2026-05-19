@@ -102,18 +102,14 @@ $classpath = $cpParts -join ";"
 # ── Find Java ──────────────────────────────────────────────────────────────────
 # MC 1.8.9 requires Java 8. Try Minecraft's own bundled runtime first.
 $javaCandidates = @(
-    # Mojang bundled runtimes
     "$McDir\runtime\java-runtime-alpha\windows-x64\java-runtime-alpha\bin\javaw.exe",
     "$env:APPDATA\CurseForge\minecraft\Install\runtime\java-runtime-alpha\windows-x64\java-runtime-alpha\bin\javaw.exe",
     "C:\Users\$env:USERNAME\curseforge\minecraft\Install\runtime\java-runtime-gamma\windows-x64\java-runtime-gamma\bin\javaw.exe",
-    # System Java 8
     "C:\Program Files\Eclipse Adoptium\jdk-8.0.392.8-hotspot\bin\javaw.exe",
     "C:\Program Files\Java\jre1.8.0_401\bin\javaw.exe",
-    "C:\Program Files\Java\jdk1.8.0_401\bin\javaw.exe",
-    # JAVA_HOME
-    if ($env:JAVA_HOME) { "$env:JAVA_HOME\bin\javaw.exe" } else { $null }
+    "C:\Program Files\Java\jdk1.8.0_401\bin\javaw.exe"
 )
-# Also try PATH
+if ($env:JAVA_HOME) { $javaCandidates += "$env:JAVA_HOME\bin\javaw.exe" }
 $fromPath = (Get-Command "javaw.exe" -ErrorAction SilentlyContinue)
 if ($fromPath) { $javaCandidates += $fromPath.Source }
 
@@ -152,8 +148,10 @@ if (-not $minecraftArgs -and $profile.arguments -and $profile.arguments.game) {
     $minecraftArgs = ($profile.arguments.game | Where-Object { $_ -is [string] }) -join " "
 }
 
-$fakeUuid  = "00000000-0000-0000-0000-$(($Username.ToLower() | ForEach-Object { $_ }) -join '')".Substring(0, 36)
-$gameArgs  = $minecraftArgs -split " "
+# Build a deterministic offline UUID from the username (last 12 hex chars padded)
+$userHex  = ($Username.ToLower() -replace '[^a-f0-9]', '') + "000000000000"
+$fakeUuid = "00000000-0000-0000-0000-" + $userHex.Substring(0, 12)
+$gameArgs  = ($minecraftArgs -split " ") | Where-Object { $_ -ne "" }
 $replacements = @{
     '${auth_player_name}'  = $Username
     '${version_name}'      = $McVersion
@@ -178,12 +176,7 @@ $mainClass = $profile.mainClass
 
 # ── Launch ─────────────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host " ████████╗███████╗███╗   ██╗████████╗ █████╗ ██╗   ██╗██╗ █████╗ " -ForegroundColor Cyan
-Write-Host " ╚══██╔══╝██╔════╝████╗  ██║╚══██╔══╝██╔══██╗██║   ██║██║██╔══██╗" -ForegroundColor Cyan
-Write-Host "    ██║   █████╗  ██╔██╗ ██║   ██║   ███████║██║   ██║██║███████║" -ForegroundColor Cyan
-Write-Host "    ██║   ██╔══╝  ██║╚██╗██║   ██║   ██╔══██║╚██╗ ██╔╝██║██╔══██║" -ForegroundColor Cyan
-Write-Host "    ██║   ███████╗██║ ╚████║   ██║   ██║  ██║ ╚████╔╝ ██║██║  ██║" -ForegroundColor Cyan
-Write-Host "    ╚═╝   ╚══════╝╚═╝  ╚═══╝   ╚═╝   ╚═╝  ╚═╝  ╚═══╝  ╚═╝╚═╝  ╚═╝" -ForegroundColor Cyan
+Write-Host "  *** TENTAVIA CLIENT ***" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "[*] MC Version : $McVersion"                          -ForegroundColor White
 Write-Host "[*] Username   : $Username"                           -ForegroundColor White
@@ -193,10 +186,7 @@ Write-Host "[*] Libraries  : $($cpParts.Count) JARs no classpath" -ForegroundCol
 Write-Host ""
 Write-Host "[*] Lancando Minecraft $McVersion com tentavia..." -ForegroundColor Green
 
-$allArgs = $jvmArgs + @("-cp", $classpath, $mainClass) + $resolvedGameArgs
+$allArgs = ($jvmArgs + @("-cp", $classpath, $mainClass) + $resolvedGameArgs) | Where-Object { $_ -ne $null -and $_ -ne "" }
 
-# Start detached so this console can close
 $proc = Start-Process -FilePath $javaExe -ArgumentList $allArgs -PassThru -WindowStyle Normal
-Write-Host "[+] PID: $($proc.Id) — MC iniciado." -ForegroundColor Green
-Write-Host "[+] Feche esta janela ou pressione Enter para sair." -ForegroundColor DarkGray
-Read-Host | Out-Null
+Write-Host "[+] PID: $($proc.Id) - MC iniciado." -ForegroundColor Green
